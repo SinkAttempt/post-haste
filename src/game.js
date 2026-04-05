@@ -36,14 +36,60 @@ const OFFICE = {
     h: 530,
 };
 
-// Station definitions
+// Layout grid
+const GRID_COLS = 5;
+const GRID_ROWS = 7;
+const GRID_CELL_W = Math.floor((CANVAS_W - 40) / GRID_COLS); // ~70
+const GRID_CELL_H = Math.floor(530 / GRID_ROWS);              // ~75
+
+// Blocked cells: pillars and fixed features [col, row]
+const BLOCKED_CELLS = [
+    [2, 3], // centre pillar
+    [1, 5], // bottom-left pillar
+];
+// Fixed features (drawn but not placeable)
+const FIXED_FEATURES = [
+    { col: 4, row: 0, label: 'DOOR', icon: '\u{1F6AA}', col2: '#888' },       // customer entrance top-right
+    { col: 4, row: 6, label: 'DOCK', icon: '\u{1F6E4}', col2: '#888' },       // loading dock bottom-right
+];
+
 // Station definitions — icons + descriptive labels
-const STATIONS = {
-    incoming: { x: 60, y: 180, w: 70, h: 55, label: 'MAIL IN', icon: '\u{1F4E8}', col: COL.brown },
-    sorting:  { x: 155, y: 400, w: 80, h: 60, label: 'SORT', icon: '\u{1F4CB}', col: COL.postal },
-    counter:  { x: 280, y: 180, w: 75, h: 55, label: 'SERVE', icon: '\u{1F6CE}', col: COL.green },
-    outgoing: { x: 280, y: 500, w: 75, h: 55, label: 'SEND OUT', icon: '\u{1F69A}', col: COL.red },
+const STATION_DEFS = {
+    incoming: { w: 70, h: 55, label: 'MAIL IN', icon: '\u{1F4E8}', col: COL.brown },
+    sorting:  { w: 80, h: 60, label: 'SORT', icon: '\u{1F4CB}', col: COL.postal },
+    counter:  { w: 75, h: 55, label: 'SERVE', icon: '\u{1F6CE}', col: COL.green },
+    outgoing: { w: 75, h: 55, label: 'SEND OUT', icon: '\u{1F69A}', col: COL.red },
 };
+
+// Default grid positions [col, row] for each station
+const DEFAULT_LAYOUT = {
+    incoming: [0, 1],
+    sorting:  [2, 4],
+    counter:  [3, 1],
+    outgoing: [3, 5],
+};
+
+// Current layout (mutable, saved/loaded)
+let layout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+
+// STATIONS object — computed from layout, referenced everywhere
+const STATIONS = {};
+function rebuildStations() {
+    for (const key in STATION_DEFS) {
+        const def = STATION_DEFS[key];
+        const [gc, gr] = layout[key];
+        STATIONS[key] = {
+            x: OFFICE.x + gc * GRID_CELL_W + (GRID_CELL_W - def.w) / 2,
+            y: OFFICE.y + gr * GRID_CELL_H + (GRID_CELL_H - def.h) / 2,
+            w: def.w,
+            h: def.h,
+            label: def.label,
+            icon: def.icon,
+            col: def.col,
+        };
+    }
+}
+rebuildStations();
 
 // Sort bins (used in sort mode)
 const BIN_COLS = [
@@ -327,6 +373,7 @@ function save() {
         daysCompleted: state.daysCompleted,
         maxStack: state.maxStack,
         moveSpeed: state.moveSpeed,
+        layout: layout,
     };
     localStorage.setItem('postHaste', JSON.stringify(data));
 }
@@ -344,6 +391,10 @@ function load() {
         state.daysCompleted = data.daysCompleted || 0;
         state.maxStack = data.maxStack || 3;
         state.moveSpeed = data.moveSpeed || PLAYER_SPEED_BASE;
+        if (data.layout) {
+            layout = data.layout;
+            rebuildStations();
+        }
     } catch (e) {
         console.error('Failed to load save:', e);
     }
@@ -498,6 +549,8 @@ function handlePointerDown(x, y, id) {
             state.upgrades = { capacity: 0, speed: 0, sortSpeed: 0 };
             state.maxStack = 3;
             state.moveSpeed = PLAYER_SPEED_BASE;
+            layout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+            rebuildStations();
             return;
         }
         startDay();
@@ -509,6 +562,10 @@ function handlePointerDown(x, y, id) {
     }
     if (state.screen === 'upgrade') {
         handleUpgradeTap(x, y);
+        return;
+    }
+    if (state.screen === 'layout') {
+        handleLayoutDown(x, y);
         return;
     }
     if (state.screen === 'sorting') {
@@ -537,6 +594,11 @@ function handlePointerDown(x, y, id) {
 }
 
 function handlePointerMove(x, y, id) {
+    if (state.screen === 'layout' && state.layoutDrag) {
+        state.layoutDrag.curX = x;
+        state.layoutDrag.curY = y;
+        return;
+    }
     if (state.screen === 'sorting' && state.sortSwipe) {
         // Tracking swipe (we handle on release)
         return;
@@ -563,6 +625,10 @@ function handlePointerMove(x, y, id) {
 }
 
 function handlePointerUp(x, y, id) {
+    if (state.screen === 'layout' && state.layoutDrag) {
+        handleLayoutDrop(x, y);
+        return;
+    }
     if (state.screen === 'sorting' && state.sortSwipe) {
         handleSortSwipe(x, y);
         state.sortSwipe = null;
@@ -683,6 +749,12 @@ function handleUpgradeTap(x, y) {
         startDay();
         return;
     }
+    // Check "Rearrange" button
+    if (x > 80 && x < CANVAS_W - 80 && y > 555 && y < 595) {
+        state.screen = 'layout';
+        state.layoutDrag = null;
+        return;
+    }
 
     // Check upgrade buy buttons
     UPGRADE_DEFS.forEach((def, i) => {
@@ -700,6 +772,219 @@ function handleUpgradeTap(x, y) {
             }
         }
     });
+}
+
+// ============================================================
+// LAYOUT EDITOR
+// ============================================================
+function gridToPixel(col, row) {
+    return {
+        x: OFFICE.x + col * GRID_CELL_W + GRID_CELL_W / 2,
+        y: OFFICE.y + row * GRID_CELL_H + GRID_CELL_H / 2,
+    };
+}
+
+function pixelToGrid(px, py) {
+    const col = Math.floor((px - OFFICE.x) / GRID_CELL_W);
+    const row = Math.floor((py - OFFICE.y) / GRID_CELL_H);
+    return [
+        Math.max(0, Math.min(GRID_COLS - 1, col)),
+        Math.max(0, Math.min(GRID_ROWS - 1, row)),
+    ];
+}
+
+function isCellBlocked(col, row) {
+    // Check pillars
+    for (const b of BLOCKED_CELLS) {
+        if (b[0] === col && b[1] === row) return true;
+    }
+    // Check fixed features
+    for (const f of FIXED_FEATURES) {
+        if (f.col === col && f.row === row) return true;
+    }
+    return false;
+}
+
+function isCellOccupied(col, row, excludeKey) {
+    for (const key in layout) {
+        if (key === excludeKey) continue;
+        if (layout[key][0] === col && layout[key][1] === row) return true;
+    }
+    return false;
+}
+
+function handleLayoutDown(x, y) {
+    // Check "Done" button
+    if (x > 120 && x < CANVAS_W - 120 && y > CANVAS_H - 70 && y < CANVAS_H - 30) {
+        state.screen = 'upgrade';
+        rebuildStations();
+        save();
+        return;
+    }
+
+    // Check if tapping a station to start dragging
+    const [gc, gr] = pixelToGrid(x, y);
+    for (const key in layout) {
+        if (layout[key][0] === gc && layout[key][1] === gr) {
+            state.layoutDrag = {
+                key,
+                origCol: gc,
+                origRow: gr,
+                curX: x,
+                curY: y,
+            };
+            return;
+        }
+    }
+}
+
+function handleLayoutDrop(x, y) {
+    if (!state.layoutDrag) return;
+    const drag = state.layoutDrag;
+    const [gc, gr] = pixelToGrid(x, y);
+
+    // Can we place here?
+    if (!isCellBlocked(gc, gr) && !isCellOccupied(gc, gr, drag.key)) {
+        layout[drag.key] = [gc, gr];
+    }
+    // Otherwise it snaps back to original position
+
+    state.layoutDrag = null;
+    rebuildStations();
+}
+
+function drawLayoutEditor() {
+    ctx.save();
+    ctx.fillStyle = COL.bg;
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    const cx = CANVAS_W / 2;
+
+    // Header
+    ctx.fillStyle = COL.postal;
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Rearrange Office', cx, 40);
+
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '12px sans-serif';
+    ctx.fillText('Drag stations to rearrange your layout', cx, 65);
+
+    // Draw grid
+    for (let c = 0; c < GRID_COLS; c++) {
+        for (let r = 0; r < GRID_ROWS; r++) {
+            const gx = OFFICE.x + c * GRID_CELL_W;
+            const gy = OFFICE.y + r * GRID_CELL_H;
+
+            // Cell background
+            const blocked = isCellBlocked(c, r);
+            if (blocked) {
+                ctx.fillStyle = '#C8C3B8';
+                drawRoundRect(gx + 2, gy + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
+                ctx.fill();
+                // Pillar icon
+                ctx.fillStyle = '#999';
+                ctx.font = '18px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('\u{1F9F1}', gx + GRID_CELL_W / 2, gy + GRID_CELL_H / 2);
+            } else {
+                ctx.fillStyle = COL.floor;
+                drawRoundRect(gx + 2, gy + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
+                ctx.fill();
+                ctx.strokeStyle = '#D4D0C8';
+                ctx.lineWidth = 1;
+                drawRoundRect(gx + 2, gy + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
+                ctx.stroke();
+            }
+        }
+    }
+
+    // Draw fixed features
+    for (const feat of FIXED_FEATURES) {
+        const gx = OFFICE.x + feat.col * GRID_CELL_W;
+        const gy = OFFICE.y + feat.row * GRID_CELL_H;
+        ctx.fillStyle = '#AAA';
+        drawRoundRect(gx + 2, gy + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
+        ctx.fill();
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(feat.icon, gx + GRID_CELL_W / 2, gy + GRID_CELL_H / 2 - 8);
+        ctx.fillStyle = COL.text;
+        ctx.font = 'bold 9px sans-serif';
+        ctx.fillText(feat.label, gx + GRID_CELL_W / 2, gy + GRID_CELL_H / 2 + 14);
+    }
+
+    // Draw placed stations (except the one being dragged)
+    for (const key in layout) {
+        if (state.layoutDrag && state.layoutDrag.key === key) continue;
+        const [gc, gr] = layout[key];
+        const def = STATION_DEFS[key];
+        const gx = OFFICE.x + gc * GRID_CELL_W;
+        const gy = OFFICE.y + gr * GRID_CELL_H;
+
+        ctx.fillStyle = def.col;
+        drawRoundRect(gx + 4, gy + 4, GRID_CELL_W - 8, GRID_CELL_H - 8, 8);
+        ctx.fill();
+
+        ctx.font = '22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(def.icon, gx + GRID_CELL_W / 2, gy + GRID_CELL_H / 2 - 8);
+
+        ctx.fillStyle = COL.white;
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(def.label, gx + GRID_CELL_W / 2, gy + GRID_CELL_H / 2 + 14);
+    }
+
+    // Draw dragged station following finger
+    if (state.layoutDrag) {
+        const drag = state.layoutDrag;
+        const def = STATION_DEFS[drag.key];
+        const dx = drag.curX - GRID_CELL_W / 2;
+        const dy = drag.curY - GRID_CELL_H / 2;
+
+        // Highlight target cell
+        const [tc, tr] = pixelToGrid(drag.curX, drag.curY);
+        const canPlace = !isCellBlocked(tc, tr) && !isCellOccupied(tc, tr, drag.key);
+        const tx = OFFICE.x + tc * GRID_CELL_W;
+        const ty = OFFICE.y + tr * GRID_CELL_H;
+        ctx.fillStyle = canPlace ? 'rgba(74,140,92,0.3)' : 'rgba(212,72,59,0.3)';
+        drawRoundRect(tx + 2, ty + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
+        ctx.fill();
+
+        // Floating station
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = def.col;
+        drawRoundRect(dx + 4, dy + 4, GRID_CELL_W - 8, GRID_CELL_H - 8, 8);
+        ctx.fill();
+        ctx.font = '22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(def.icon, drag.curX, drag.curY - 8);
+        ctx.fillStyle = COL.white;
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(def.label, drag.curX, drag.curY + 14);
+        ctx.globalAlpha = 1;
+    }
+
+    // Hint
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u{1F9F1} = pillar (blocked)  \u{1F6AA} = customer door  \u{1F6E4} = loading dock', cx, CANVAS_H - 90);
+
+    // Done button
+    ctx.fillStyle = COL.postal;
+    drawRoundRect(120, CANVAS_H - 70, CANVAS_W - 240, 40, 10);
+    ctx.fill();
+    ctx.fillStyle = COL.white;
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText('Done', cx, CANVAS_H - 50);
+
+    ctx.restore();
 }
 
 // ============================================================
@@ -2323,10 +2608,18 @@ function drawUpgradeScreen() {
     ctx.textAlign = 'center';
     ctx.fillText('\u{1F4EC} Start Day ' + state.day, cx, btnY + 28);
 
+    // Rearrange button
+    ctx.fillStyle = COL.brown;
+    drawRoundRect(80, 555, CANVAS_W - 160, 40, 10);
+    ctx.fill();
+    ctx.fillStyle = COL.white;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('\u{1F3D7} Rearrange Office', cx, 575);
+
     // Hint
     ctx.fillStyle = COL.textLight;
     ctx.font = '11px sans-serif';
-    ctx.fillText('Upgrades carry over between shifts', cx, btnY + 75);
+    ctx.fillText('Upgrades carry over between shifts', cx, 615);
 
     ctx.restore();
 }
@@ -2382,6 +2675,9 @@ function render() {
             break;
         case 'upgrade':
             drawUpgradeScreen();
+            break;
+        case 'layout':
+            drawLayoutEditor();
             break;
     }
 
