@@ -354,16 +354,27 @@ function load() {
 // ============================================================
 let mailIdCounter = 0;
 
+// Day milestones — what unlocks when
+const MILESTONES = [
+    { day: 4, text: 'Parcels arriving!', desc: 'Heavier — take 2 bag slots' },
+    { day: 5, text: 'New bin: Green!', desc: '3 sorting destinations now' },
+    { day: 8, text: 'Impatient customers!', desc: 'They won\'t wait as long' },
+    { day: 12, text: 'Dispatch deadline!', desc: 'Sorted mail expires if not sent' },
+    { day: 16, text: 'Fragile parcels!', desc: 'Handle with care — move slower' },
+];
+
 function createMail() {
     const binCount = state.sortBinCount;
     const binIdx = Math.floor(Math.random() * binCount);
-    const isParcel = state.day >= 5 && Math.random() < 0.3;
+    const isParcel = state.day >= 4 && Math.random() < (0.2 + state.day * 0.02);
+    const isFragile = state.day >= 16 && isParcel && Math.random() < 0.25;
     return {
         id: mailIdCounter++,
         bin: binIdx,
         col: BIN_COLS[binIdx].col,
         label: BIN_COLS[binIdx].name,
         isParcel,
+        isFragile,
         weight: isParcel ? 2 : 1,
     };
 }
@@ -843,6 +854,7 @@ function startDay() {
     state.customersServed = 0;
     state.incomingPile = [];
     state.outgoingPile = [];
+    state.outgoingTimer = 0;
     state.stack = [];
     state.sortItem = null;
     state.customers = [];
@@ -852,9 +864,27 @@ function startDay() {
     state.lastMailSpawn = Date.now();
     state.lastCustomerSpawn = Date.now();
     floatingTexts = [];
+    particles = [];
+    state.milestone = null;
 
-    // Scale difficulty by day
-    state.sortBinCount = state.day >= 10 ? 3 : 2;
+    // === PROGRESSION: scale by day ===
+    // Bins: 2 at start, 3 from day 5
+    state.sortBinCount = state.day >= 5 ? 3 : 2;
+
+    // Customer patience gets shorter from day 8
+    state.currentPatience = state.day >= 8
+        ? Math.max(6000, CUSTOMER_PATIENCE - (state.day - 8) * 500)
+        : CUSTOMER_PATIENCE;
+
+    // Outgoing dispatch deadline from day 12
+    state.outgoingDeadline = state.day >= 12 ? 20 : 0; // seconds, 0 = no deadline
+
+    // Check for milestone notification
+    const milestone = MILESTONES.find(m => m.day === state.day);
+    if (milestone) {
+        state.milestone = milestone;
+        state.milestoneTimer = 3.0; // show for 3 seconds
+    }
 
     // Seed initial mail — start busy, scale with day
     const seedCount = Math.min(3 + Math.floor(state.day / 3), 8);
@@ -939,7 +969,7 @@ function update(dt) {
     if (now - state.lastCustomerSpawn > custInterval && state.customers.length < 3) {
         state.customers.push({
             id: Date.now(),
-            patience: CUSTOMER_PATIENCE,
+            patience: state.currentPatience || CUSTOMER_PATIENCE,
             coins: 3 + Math.floor(Math.random() * 7),
         });
         state.lastCustomerSpawn = now;
@@ -953,9 +983,35 @@ function update(dt) {
         }
     }
 
+    // Outgoing deadline (day 12+): sorted mail expires
+    if (state.outgoingDeadline > 0 && state.outgoingPile.length > 0) {
+        state.outgoingTimer += dt;
+        if (state.outgoingTimer >= state.outgoingDeadline) {
+            // Mail expired — van left without it
+            const lost = state.outgoingPile.length;
+            state.outgoingPile = [];
+            state.outgoingTimer = 0;
+            const oc = stationCenter(STATIONS.outgoing);
+            floatingTexts.push(createFloatingText('Van left! -' + lost, oc.x, oc.y - 30, COL.red, 18));
+            addShake(1);
+        }
+    }
+
+    // Milestone notification countdown
+    if (state.milestoneTimer > 0) {
+        state.milestoneTimer -= dt;
+    }
+
+    // Fragile penalty: move slower when carrying fragile items
+    let fragileSlowdown = 1.0;
+    if (state.day >= 16) {
+        const hasFragile = state.stack.some(item => item.isFragile);
+        if (hasFragile) fragileSlowdown = 0.6;
+    }
+
     // Move player
-    const px = state.player.x + state.joy.dx * state.moveSpeed;
-    const py = state.player.y + state.joy.dy * state.moveSpeed;
+    const px = state.player.x + state.joy.dx * state.moveSpeed * fragileSlowdown;
+    const py = state.player.y + state.joy.dy * state.moveSpeed * fragileSlowdown;
 
     // Clamp to office bounds
     const margin = PLAYER_RADIUS + 5;
@@ -1012,6 +1068,7 @@ function update(dt) {
         addBump(0, -3);
         sfxDispatch();
         state.outgoingPile = [];
+        state.outgoingTimer = 0;
     }
 
 }
@@ -1203,6 +1260,13 @@ function drawPlayer() {
             ctx.lineTo(ix + iw / 2, iy);
             ctx.stroke();
         }
+        // Fragile marker
+        if (item.isFragile) {
+            ctx.fillStyle = COL.red;
+            ctx.font = '6px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('!', ix + iw / 2, iy - ih + 4);
+        }
     }
 
     ctx.restore();
@@ -1336,6 +1400,68 @@ function getContextHint() {
         return '\u{1F6CE} Customer waiting! Walk to SERVE counter';
     }
     return null;
+}
+
+function drawMilestone() {
+    if (!state.milestone || state.milestoneTimer <= 0) return;
+    ctx.save();
+    const alpha = Math.min(state.milestoneTimer, 1);
+    ctx.globalAlpha = alpha;
+
+    const cx = CANVAS_W / 2;
+    const y = CANVAS_H / 2 - 180;
+
+    // Banner background
+    ctx.fillStyle = COL.postal;
+    drawRoundRect(40, y - 25, CANVAS_W - 80, 55, 12);
+    ctx.fill();
+
+    // Title
+    ctx.fillStyle = COL.yellow;
+    ctx.font = 'bold 16px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\u{2B50} ' + state.milestone.text, cx, y - 6);
+
+    // Description
+    ctx.fillStyle = COL.white;
+    ctx.font = '12px sans-serif';
+    ctx.fillText(state.milestone.desc, cx, y + 16);
+
+    ctx.restore();
+}
+
+function drawOutgoingTimer() {
+    if (!state.outgoingDeadline || state.outgoingPile.length === 0) return;
+    ctx.save();
+
+    const s = STATIONS.outgoing;
+    const remaining = state.outgoingDeadline - state.outgoingTimer;
+    const pct = remaining / state.outgoingDeadline;
+
+    // Timer bar below outgoing station
+    const barX = s.x;
+    const barY = s.y + s.h + 6;
+    const barW = s.w;
+    const barH = 5;
+
+    ctx.fillStyle = '#555';
+    drawRoundRect(barX, barY, barW, barH, 2);
+    ctx.fill();
+
+    ctx.fillStyle = pct > 0.3 ? COL.green : COL.red;
+    drawRoundRect(barX, barY, Math.max(barW * pct, 2), barH, 2);
+    ctx.fill();
+
+    // Urgent text when low
+    if (pct < 0.3) {
+        ctx.fillStyle = COL.red;
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('VAN LEAVING!', s.x + s.w / 2, barY + 14);
+    }
+
+    ctx.restore();
 }
 
 function drawOffice() {
@@ -1566,7 +1692,9 @@ function drawSortMode() {
         ctx.fillText(state.sortItem.isParcel ? '\u{1F4E6}' : '\u{2709}', cx, cy + 8);
         ctx.font = '12px sans-serif';
         ctx.fillStyle = COL.textLight;
-        ctx.fillText(state.sortItem.isParcel ? 'PARCEL' : 'LETTER', cx, cy + 32);
+        const typeLabel = state.sortItem.isFragile ? 'FRAGILE!' : (state.sortItem.isParcel ? 'PARCEL' : 'LETTER');
+        ctx.fillStyle = state.sortItem.isFragile ? COL.red : COL.textLight;
+        ctx.fillText(typeLabel, cx, cy + 32);
     }
 
     // === INSTRUCTION (bottom, clear) ===
@@ -1691,10 +1819,10 @@ function drawMenu() {
 
     const testerLines = [
         ['\u{23E9}', 'SKIP button (top-right during play) skips to end of day'],
-        ['\u{1F4E6}', 'Day 5+: parcels appear (heavier, take more bag space)'],
-        ['\u{1F7E2}', 'Day 10+: 3rd sorting bin unlocks (green)'],
-        ['\u{1F4B0}', 'Between days: upgrade carry capacity and move speed'],
-        ['\u{1F525}', 'Correct sort streaks give coin multipliers (up to 3x)'],
+        ['\u{1F4E6}', 'Day 4: parcels arrive (heavier, 2 bag slots each)'],
+        ['\u{1F7E2}', 'Day 5: 3rd sorting bin (green) unlocks'],
+        ['\u{23F0}', 'Day 8: customers get impatient faster'],
+        ['\u{1F69A}', 'Day 12: dispatch deadline — van leaves without your mail!'],
     ];
 
     testerLines.forEach((line) => {
@@ -2016,6 +2144,8 @@ function render() {
             drawJoystick();
             drawHUD();
             drawFloatingTexts();
+            drawMilestone();
+            drawOutgoingTimer();
             break;
         case 'sorting':
             ctx.fillStyle = COL.bg;
