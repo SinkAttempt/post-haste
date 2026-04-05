@@ -33,15 +33,16 @@ const OFFICE = {
     x: 20,
     y: 100,
     w: CANVAS_W - 40,
-    h: 520,
+    h: 530,
 };
 
 // Station definitions
+// Station definitions — icons + descriptive labels
 const STATIONS = {
-    incoming: { x: 60, y: 180, w: 70, h: 50, label: 'INCOMING', col: COL.brown },
-    sorting:  { x: 160, y: 400, w: 80, h: 60, label: 'SORT DESK', col: COL.postal },
-    counter:  { x: 290, y: 180, w: 70, h: 50, label: 'COUNTER', col: COL.green },
-    outgoing: { x: 290, y: 500, w: 70, h: 50, label: 'OUTGOING', col: COL.red },
+    incoming: { x: 60, y: 180, w: 70, h: 55, label: 'MAIL IN', icon: '\u{1F4E8}', col: COL.brown },
+    sorting:  { x: 155, y: 400, w: 80, h: 60, label: 'SORT', icon: '\u{1F4CB}', col: COL.postal },
+    counter:  { x: 280, y: 180, w: 75, h: 55, label: 'SERVE', icon: '\u{1F6CE}', col: COL.green },
+    outgoing: { x: 280, y: 500, w: 75, h: 55, label: 'SEND OUT', icon: '\u{1F69A}', col: COL.red },
 };
 
 // Sort bins (used in sort mode)
@@ -127,6 +128,10 @@ const state = {
     // Persistence
     totalStars: 0,
     daysCompleted: 0,
+
+    // Tutorial / hints
+    hintTimer: 0,
+    hintsShown: {},  // track which hints the player has seen
 };
 
 // ============================================================
@@ -307,7 +312,7 @@ function handlePointerDown(x, y, id) {
     }
     if (state.screen === 'playing') {
         // Debug skip button (top-right)
-        if (x > CANVAS_W - 50 && x < CANVAS_W && y > 62 && y < 84) {
+        if (x > CANVAS_W - 50 && x < CANVAS_W && y > 74 && y < 98) {
             endDay();
             return;
         }
@@ -448,15 +453,17 @@ function getUpgradeCost(def) {
 
 function handleUpgradeTap(x, y) {
     // Check "Next Day" button
-    if (x > 120 && x < 270 && y > 680 && y < 730) {
+    if (x > 80 && x < CANVAS_W - 80 && y > 490 && y < 545) {
         startDay();
         return;
     }
 
-    // Check upgrade buttons
+    // Check upgrade buy buttons
     UPGRADE_DEFS.forEach((def, i) => {
-        const btnY = 380 + i * 120;
-        if (x > 60 && x < 330 && y > btnY && y < btnY + 90) {
+        const cardY = 210 + i * 130;
+        const btnX = CANVAS_W - 145;
+        const btnY = cardY + 72;
+        if (x > btnX && x < btnX + 100 && y > btnY && y < btnY + 32) {
             const cost = getUpgradeCost(def);
             if (state.coins >= cost) {
                 state.coins -= cost;
@@ -672,39 +679,46 @@ function drawRoundRect(x, y, w, h, r) {
 
 function drawStation(key) {
     const s = STATIONS[key];
+    const cx = s.x + s.w / 2;
+    const cy = s.y + s.h / 2;
     ctx.save();
 
     // Shadow
     ctx.fillStyle = COL.shadow;
-    drawRoundRect(s.x + 2, s.y + 2, s.w, s.h, 6);
+    drawRoundRect(s.x + 3, s.y + 3, s.w, s.h, 8);
     ctx.fill();
 
     // Body
     ctx.fillStyle = s.col;
-    drawRoundRect(s.x, s.y, s.w, s.h, 6);
+    drawRoundRect(s.x, s.y, s.w, s.h, 8);
     ctx.fill();
+
+    // Icon
+    ctx.font = '20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s.icon, cx, cy - 8);
 
     // Label
     ctx.fillStyle = COL.white;
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(s.label, s.x + s.w / 2, s.y + s.h / 2);
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText(s.label, cx, cy + 14);
 
-    // Indicator counts
+    // Badge count
     let count = 0;
     if (key === 'incoming') count = state.incomingPile.length;
     if (key === 'counter') count = state.customers.length;
     if (key === 'outgoing') count = state.outgoingPile.length;
 
     if (count > 0) {
-        ctx.fillStyle = COL.white;
+        // Red notification badge
+        ctx.fillStyle = COL.red;
         ctx.beginPath();
-        ctx.arc(s.x + s.w - 5, s.y + 5, 10, 0, Math.PI * 2);
+        ctx.arc(s.x + s.w - 2, s.y + 2, 12, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = s.col;
-        ctx.font = 'bold 11px sans-serif';
-        ctx.fillText(count, s.x + s.w - 5, s.y + 6);
+        ctx.fillStyle = COL.white;
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(count, s.x + s.w - 2, s.y + 3);
     }
 
     ctx.restore();
@@ -809,58 +823,102 @@ function drawHUD() {
 
     // Top bar background
     ctx.fillStyle = COL.postal;
-    ctx.fillRect(0, 0, CANVAS_W, 80);
+    ctx.fillRect(0, 0, CANVAS_W, 90);
+
+    // Row 1: Day | Timer | Coins
+    ctx.fillStyle = COL.white;
+    ctx.textBaseline = 'middle';
 
     // Day
-    ctx.fillStyle = COL.white;
-    ctx.font = 'bold 16px sans-serif';
+    ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('Day ' + state.day, 15, 25);
+    ctx.fillText('DAY ' + state.day, 15, 22);
 
-    // Timer
+    // Timer (centre, large)
     const mins = Math.floor(state.timeLeft / 60);
     const secs = state.timeLeft % 60;
     const timeStr = mins + ':' + (secs < 10 ? '0' : '') + secs;
     ctx.textAlign = 'center';
-    ctx.font = 'bold 22px sans-serif';
-    if (state.timeLeft <= 30) ctx.fillStyle = COL.red;
-    ctx.fillText(timeStr, CANVAS_W / 2, 25);
+    ctx.font = 'bold 24px sans-serif';
+    if (state.timeLeft <= 30) ctx.fillStyle = '#FF6B6B';
+    ctx.fillText(timeStr, CANVAS_W / 2, 22);
 
-    // Coins
+    // Coins with icon
     ctx.fillStyle = COL.yellow;
     ctx.textAlign = 'right';
     ctx.font = 'bold 16px sans-serif';
-    ctx.fillText(state.dayCoins + ' coins', CANVAS_W - 15, 25);
+    ctx.fillText('\u{1F4B0} ' + state.dayCoins, CANVAS_W - 15, 22);
 
-    // Streak
+    // Row 2: Visual mail bag indicator | streak | sorted
+    // Mail bag (visual stack count)
+    ctx.fillStyle = 'rgba(255,255,255,0.25)';
+    drawRoundRect(12, 42, 100, 18, 4);
+    ctx.fill();
+    // Fill based on capacity
+    const fillPct = state.stack.length / state.maxStack;
+    if (fillPct > 0) {
+        ctx.fillStyle = fillPct >= 1 ? '#FF6B6B' : 'rgba(255,255,255,0.6)';
+        drawRoundRect(12, 42, Math.max(100 * fillPct, 8), 18, 4);
+        ctx.fill();
+    }
+    ctx.fillStyle = COL.white;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u{1F4E6} ' + state.stack.length + ' / ' + state.maxStack, 62, 52);
+
+    // Streak (centre)
     if (state.streak > 1) {
         ctx.fillStyle = COL.streakGlow;
-        ctx.textAlign = 'center';
         ctx.font = 'bold 14px sans-serif';
-        ctx.fillText('Streak x' + state.streak, CANVAS_W / 2, 55);
+        ctx.textAlign = 'center';
+        ctx.fillText('\u{1F525} x' + state.streak, CANVAS_W / 2, 52);
     }
 
-    // Stack indicator
-    ctx.fillStyle = COL.highlight;
-    ctx.textAlign = 'left';
-    ctx.font = '12px sans-serif';
-    ctx.fillText('Carrying: ' + state.stack.length + '/' + state.maxStack, 15, 55);
-
     // Sorted count
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.font = 'bold 11px sans-serif';
     ctx.textAlign = 'right';
-    ctx.fillText('Sorted: ' + state.sortedCount, CANVAS_W - 15, 55);
+    ctx.fillText('\u{2705} ' + state.sortedCount + ' sorted', CANVAS_W - 15, 52);
+
+    // Row 3: Contextual hint
+    const hint = getContextHint();
+    if (hint) {
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(hint, CANVAS_W / 2, 74);
+    }
 
     // Debug: Skip day button (top-right)
-    ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    drawRoundRect(CANVAS_W - 50, 62, 40, 22, 4);
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    drawRoundRect(CANVAS_W - 45, 78, 35, 16, 3);
     ctx.fill();
-    ctx.fillStyle = COL.white;
-    ctx.font = 'bold 10px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font = '9px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('SKIP', CANVAS_W - 30, 74);
+    ctx.fillText('SKIP', CANVAS_W - 28, 87);
 
     ctx.restore();
+}
+
+function getContextHint() {
+    // Priority-based hints — show the most relevant one
+    if (state.stack.length === 0 && state.incomingPile.length > 0) {
+        return '\u{1F449} Walk to MAIL IN to collect mail';
+    }
+    if (state.stack.length >= state.maxStack) {
+        return '\u{1F4E6} Bag full! Walk to SORT desk';
+    }
+    if (state.stack.length > 0 && state.outgoingPile.length === 0) {
+        return '\u{1F4CB} Walk to SORT desk to sort your mail';
+    }
+    if (state.outgoingPile.length > 0) {
+        return '\u{1F69A} Walk to SEND OUT to dispatch sorted mail';
+    }
+    if (state.customers.length > 0 && state.stack.length === 0) {
+        return '\u{1F6CE} Customer waiting! Walk to SERVE counter';
+    }
+    return null;
 }
 
 function drawOffice() {
@@ -902,30 +960,52 @@ function drawOffice() {
     // Proximity hints (glow when near and can interact)
     if (state.screen === 'playing') {
         if (nearStation('incoming') && state.incomingPile.length > 0 && state.stack.length < state.maxStack) {
-            drawProximityGlow(STATIONS.incoming);
+            drawProximityGlow(STATIONS.incoming, 'COLLECTING');
         }
         if (nearStation('sorting') && state.stack.length > 0) {
-            drawProximityGlow(STATIONS.sorting);
+            drawProximityGlow(STATIONS.sorting, 'STOP TO SORT');
         }
         if (nearStation('counter') && state.customers.length > 0) {
-            drawProximityGlow(STATIONS.counter);
+            drawProximityGlow(STATIONS.counter, 'SERVING');
         }
         if (nearStation('outgoing') && state.outgoingPile.length > 0) {
-            drawProximityGlow(STATIONS.outgoing);
+            drawProximityGlow(STATIONS.outgoing, 'DISPATCHING');
         }
     }
 
     ctx.restore();
 }
 
-function drawProximityGlow(s) {
+function drawProximityGlow(s, actionText) {
     ctx.save();
     const pulse = 0.3 + Math.sin(Date.now() * 0.005) * 0.15;
-    ctx.globalAlpha = pulse;
+
+    // Glow ring
+    ctx.globalAlpha = pulse + 0.15;
     ctx.strokeStyle = COL.yellow;
     ctx.lineWidth = 3;
-    drawRoundRect(s.x - 4, s.y - 4, s.w + 8, s.h + 8, 8);
+    drawRoundRect(s.x - 5, s.y - 5, s.w + 10, s.h + 10, 10);
     ctx.stroke();
+
+    // Action label above station
+    if (actionText) {
+        ctx.globalAlpha = 0.85;
+        const tx = s.x + s.w / 2;
+        const ty = s.y - 16;
+
+        // Pill background
+        ctx.fillStyle = COL.yellow;
+        const tw = ctx.measureText ? 60 : 50;
+        drawRoundRect(tx - 40, ty - 10, 80, 20, 6);
+        ctx.fill();
+
+        ctx.fillStyle = COL.text;
+        ctx.font = 'bold 10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(actionText, tx, ty);
+    }
+
     ctx.restore();
 }
 
@@ -949,103 +1029,135 @@ function drawSortMode() {
     ctx.save();
 
     // Dim background
-    ctx.fillStyle = COL.overlay;
+    ctx.fillStyle = 'rgba(26,26,46,0.85)';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Title
-    ctx.fillStyle = COL.white;
-    ctx.font = 'bold 20px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('SORT THE MAIL', CANVAS_W / 2, 80);
+    const cx = CANVAS_W / 2;
+    const cy = CANVAS_H / 2 - 20;
 
-    // Remaining count
-    ctx.font = '14px sans-serif';
-    ctx.fillText(state.stack.length + ' remaining', CANVAS_W / 2, 110);
+    // Header area
+    ctx.fillStyle = COL.white;
+    ctx.font = 'bold 18px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('SORTING DESK', cx, 60);
+
+    // Progress dots (show how many items left)
+    const totalItems = state.stack.length + 1; // +1 for current
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText((totalItems - state.stack.length) + ' of ' + totalItems, cx, 85);
 
     // Streak
     if (state.streak > 1) {
+        const streakPulse = 1 + Math.sin(Date.now() * 0.008) * 0.1;
+        ctx.save();
+        ctx.translate(cx, 115);
+        ctx.scale(streakPulse, streakPulse);
         ctx.fillStyle = COL.streakGlow;
-        ctx.font = 'bold 18px sans-serif';
-        ctx.fillText('STREAK x' + state.streak, CANVAS_W / 2, 145);
+        ctx.font = 'bold 20px sans-serif';
+        ctx.fillText('\u{1F525} x' + state.streak, 0, 0);
+        ctx.restore();
     }
 
-    // Current item
-    if (state.sortItem) {
-        const cx = CANVAS_W / 2;
-        const cy = CANVAS_H / 2;
-        const iw = state.sortItem.isParcel ? 120 : 100;
-        const ih = state.sortItem.isParcel ? 80 : 50;
-
-        // Item card
-        ctx.fillStyle = COL.white;
-        ctx.shadowColor = COL.shadow;
-        ctx.shadowBlur = 10;
-        drawRoundRect(cx - iw / 2, cy - ih / 2, iw, ih, 10);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-
-        // Colour stripe
-        ctx.fillStyle = state.sortItem.col;
-        drawRoundRect(cx - iw / 2, cy - ih / 2, iw, 20, 10);
-        ctx.fill();
-        // Fix bottom corners of stripe
-        ctx.fillRect(cx - iw / 2, cy - ih / 2 + 10, iw, 10);
-
-        // Label
-        ctx.fillStyle = COL.text;
-        ctx.font = 'bold 18px sans-serif';
-        ctx.fillText(state.sortItem.label, cx, cy + 5);
-
-        // Type
-        ctx.font = '12px sans-serif';
-        ctx.fillStyle = COL.textLight;
-        ctx.fillText(state.sortItem.isParcel ? 'PARCEL' : 'LETTER', cx, cy + 25);
-    }
-
-    // Bin labels
+    // === BIN TARGETS (large, clear, positioned at edges) ===
     const activeBins = BIN_COLS.slice(0, state.sortBinCount);
     for (const bin of activeBins) {
         ctx.save();
-        let bx, by;
-        if (bin.dir === 'left') { bx = 50; by = CANVAS_H / 2; }
-        if (bin.dir === 'right') { bx = CANVAS_W - 50; by = CANVAS_H / 2; }
-        if (bin.dir === 'up') { bx = CANVAS_W / 2; by = CANVAS_H / 2 - 160; }
+        let bx, by, bw, bh;
 
-        // Bin box
+        if (bin.dir === 'left') {
+            bx = 15; by = cy - 45; bw = 70; bh = 90;
+        } else if (bin.dir === 'right') {
+            bx = CANVAS_W - 85; by = cy - 45; bw = 70; bh = 90;
+        } else if (bin.dir === 'up') {
+            bx = cx - 45; by = 150; bw = 90; bh = 65;
+        }
+
+        // Bin background
         ctx.fillStyle = bin.col;
-        ctx.globalAlpha = 0.8;
-        drawRoundRect(bx - 30, by - 20, 60, 40, 8);
+        ctx.globalAlpha = 0.2;
+        drawRoundRect(bx, by, bw, bh, 12);
         ctx.fill();
 
-        // Arrow
-        ctx.globalAlpha = 0.4;
+        // Bin border
+        ctx.globalAlpha = 0.8;
+        ctx.strokeStyle = bin.col;
+        ctx.lineWidth = 3;
+        drawRoundRect(bx, by, bw, bh, 12);
+        ctx.stroke();
+
+        // Arrow pointing inward (toward bin)
+        ctx.globalAlpha = 0.6;
         ctx.fillStyle = bin.col;
-        const arrowDist = 70;
-        let ax, ay;
-        if (bin.dir === 'left') { ax = bx + arrowDist; ay = by; }
-        if (bin.dir === 'right') { ax = bx - arrowDist; ay = by; }
-        if (bin.dir === 'up') { ax = bx; ay = by + arrowDist; }
-        ctx.font = '24px sans-serif';
+        ctx.font = '28px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        const arrows = { left: '←', right: '→', up: '↑' };
-        ctx.fillText(arrows[bin.dir], ax, ay);
+        const arrows = { left: '\u{2B05}', right: '\u{27A1}', up: '\u{2B06}' };
+        ctx.fillText(arrows[bin.dir], bx + bw / 2, by + (bin.dir === 'up' ? 22 : 30));
 
-        // Label
+        // Bin colour name (large, clear)
         ctx.globalAlpha = 1;
-        ctx.fillStyle = COL.white;
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText(bin.name, bx, by);
+        ctx.fillStyle = bin.col;
+        ctx.font = 'bold 14px sans-serif';
+        ctx.fillText(bin.name, bx + bw / 2, by + (bin.dir === 'up' ? 50 : bh - 18));
 
         ctx.restore();
     }
 
-    // Instruction
+    // === CURRENT ITEM (large, centred, clear) ===
+    if (state.sortItem) {
+        const iw = 140;
+        const ih = 100;
+
+        // Card shadow
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        drawRoundRect(cx - iw / 2 + 3, cy - ih / 2 + 3, iw, ih, 14);
+        ctx.fill();
+
+        // Card background
+        ctx.fillStyle = COL.white;
+        drawRoundRect(cx - iw / 2, cy - ih / 2, iw, ih, 14);
+        ctx.fill();
+
+        // Big colour bar at top
+        ctx.fillStyle = state.sortItem.col;
+        drawRoundRect(cx - iw / 2, cy - ih / 2, iw, 35, 14);
+        ctx.fill();
+        ctx.fillRect(cx - iw / 2, cy - ih / 2 + 20, iw, 15);
+
+        // Colour name on bar
+        ctx.fillStyle = COL.white;
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(state.sortItem.label, cx, cy - ih / 2 + 18);
+
+        // Mail type icon + label
+        ctx.fillStyle = COL.text;
+        ctx.font = '24px sans-serif';
+        ctx.fillText(state.sortItem.isParcel ? '\u{1F4E6}' : '\u{2709}', cx, cy + 8);
+        ctx.font = '12px sans-serif';
+        ctx.fillStyle = COL.textLight;
+        ctx.fillText(state.sortItem.isParcel ? 'PARCEL' : 'LETTER', cx, cy + 32);
+    }
+
+    // === INSTRUCTION (bottom, clear) ===
     ctx.fillStyle = COL.white;
-    ctx.globalAlpha = 0.6;
-    ctx.font = '13px sans-serif';
+    ctx.globalAlpha = 0.7;
+    ctx.font = '14px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Swipe mail to the matching bin', CANVAS_W / 2, CANVAS_H - 120);
+
+    // Dynamic instruction based on current item
+    if (state.sortItem) {
+        const matchBin = BIN_COLS[state.sortItem.bin];
+        ctx.fillText('Swipe toward the ' + matchBin.name + ' bin', cx, CANVAS_H - 140);
+    }
+
+    // Swipe gesture hint (animated)
+    ctx.globalAlpha = 0.3 + Math.sin(Date.now() * 0.004) * 0.15;
+    ctx.font = '12px sans-serif';
+    ctx.fillText('\u{261D} swipe to sort', cx, CANVAS_H - 110);
 
     drawFloatingTexts();
     ctx.restore();
@@ -1059,43 +1171,84 @@ function drawMenu() {
     ctx.fillStyle = COL.bg;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
+    const cx = CANVAS_W / 2;
+
     // Title
     ctx.fillStyle = COL.postal;
-    ctx.font = 'bold 48px sans-serif';
+    ctx.font = 'bold 52px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('POST', CANVAS_W / 2, 280);
-    ctx.fillText('HASTE', CANVAS_W / 2, 340);
+    ctx.fillText('POST', cx, 180);
+    ctx.fillText('HASTE', cx, 240);
 
     // Subtitle
     ctx.fillStyle = COL.brown;
     ctx.font = '16px sans-serif';
-    ctx.fillText('Sort. Serve. Deliver.', CANVAS_W / 2, 390);
+    ctx.fillText('Sort. Serve. Deliver.', cx, 285);
 
-    // Stats
+    // Stats (returning player)
     if (state.daysCompleted > 0) {
         ctx.fillStyle = COL.textLight;
         ctx.font = '14px sans-serif';
-        ctx.fillText('Day ' + state.day + ' | ' + state.totalCoins + ' coins | ' + state.totalStars + ' stars', CANVAS_W / 2, 450);
+        ctx.fillText('Day ' + state.day + '  \u{2022}  \u{1F4B0} ' + state.totalCoins + '  \u{2022}  \u{2B50} ' + state.totalStars, cx, 330);
     }
 
-    // Start button
+    // How to play section
+    const howY = state.daysCompleted > 0 ? 380 : 350;
     ctx.fillStyle = COL.postal;
-    drawRoundRect(120, 520, 150, 50, 12);
-    ctx.fill();
-    ctx.fillStyle = COL.white;
-    ctx.font = 'bold 18px sans-serif';
-    ctx.fillText(state.daysCompleted > 0 ? 'Next Shift' : 'Start', CANVAS_W / 2, 545);
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText('HOW TO PLAY', cx, howY);
 
-    // Tap hint
+    const steps = [
+        ['\u{1F4E8}', 'Collect', 'Walk to MAIL IN to pick up mail'],
+        ['\u{1F4CB}', 'Sort', 'Walk to SORT desk, swipe to correct bin'],
+        ['\u{1F69A}', 'Deliver', 'Walk to SEND OUT to dispatch'],
+        ['\u{1F6CE}', 'Serve', 'Walk to SERVE counter for tips'],
+    ];
+
+    steps.forEach((step, i) => {
+        const sy = howY + 30 + i * 42;
+
+        // Icon
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(step[0], 55, sy + 2);
+
+        // Bold action
+        ctx.fillStyle = COL.text;
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(step[1], 80, sy - 6);
+
+        // Description
+        ctx.fillStyle = COL.textLight;
+        ctx.font = '12px sans-serif';
+        ctx.fillText(step[2], 80, sy + 12);
+
+        ctx.fillStyle = COL.postal;
+    });
+
+    // Control hint
+    const ctrlY = howY + 210;
     ctx.fillStyle = COL.textLight;
     ctx.font = '12px sans-serif';
-    ctx.fillText('Tap anywhere to begin', CANVAS_W / 2, 620);
+    ctx.textAlign = 'center';
+    ctx.fillText('\u{1F44D} Touch & drag bottom of screen to move', cx, ctrlY);
+
+    // Start button
+    const btnY = ctrlY + 40;
+    ctx.fillStyle = COL.postal;
+    drawRoundRect(100, btnY, 190, 55, 14);
+    ctx.fill();
+    ctx.fillStyle = COL.white;
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(state.daysCompleted > 0 ? '\u{1F4EC} Next Shift' : '\u{1F4EC} Start Shift', cx, btnY + 28);
 
     // DuckDuckWeasel
     ctx.font = '11px sans-serif';
     ctx.fillStyle = COL.textLight;
-    ctx.fillText('DuckDuckWeasel', CANVAS_W / 2, CANVAS_H - 30);
+    ctx.fillText('DuckDuckWeasel', cx, CANVAS_H - 30);
 
     ctx.restore();
 }
@@ -1108,40 +1261,100 @@ function drawDayEnd() {
     ctx.fillStyle = COL.bg;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
+    const cx = CANVAS_W / 2;
+
     // Title
     ctx.fillStyle = COL.postal;
     ctx.font = 'bold 28px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Shift Complete!', CANVAS_W / 2, 150);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Shift Complete!', cx, 130);
 
-    // Stars
-    const starY = 210;
-    for (let i = 0; i < 3; i++) {
-        ctx.font = '40px sans-serif';
-        ctx.fillStyle = i < state.dayStars ? COL.yellow : COL.wall;
-        ctx.fillText('★', CANVAS_W / 2 - 50 + i * 50, starY);
-    }
-
-    // Stats
-    ctx.fillStyle = COL.text;
-    ctx.font = '16px sans-serif';
-    const stats = [
-        'Mail Sorted: ' + state.sortedCount,
-        'Missorts: ' + state.missortCount,
-        'Customers Served: ' + state.customersServed,
-        'Deliveries: ' + state.mailDelivered,
-        'Best Streak: ' + state.bestStreak,
-        '',
-        'Coins Earned: ' + state.dayCoins,
-    ];
-    stats.forEach((s, i) => {
-        ctx.fillText(s, CANVAS_W / 2, 290 + i * 30);
-    });
-
-    // Tap to continue
     ctx.fillStyle = COL.textLight;
     ctx.font = '14px sans-serif';
-    ctx.fillText('Tap to continue', CANVAS_W / 2, 600);
+    ctx.fillText('Day ' + (state.day - 1) + ' finished', cx, 160);
+
+    // Stars (large)
+    const starY = 210;
+    for (let i = 0; i < 3; i++) {
+        ctx.font = '48px sans-serif';
+        ctx.fillStyle = i < state.dayStars ? COL.yellow : COL.wall;
+        ctx.fillText('\u{2B50}', cx - 60 + i * 60, starY);
+    }
+
+    // Star requirements hint
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '11px sans-serif';
+    if (state.dayStars < 2) {
+        ctx.fillText('\u{2B50}\u{2B50} Sort 10+ with 2 or fewer mistakes', cx, starY + 35);
+    } else if (state.dayStars < 3) {
+        ctx.fillText('\u{2B50}\u{2B50}\u{2B50} Sort 20+ with zero mistakes', cx, starY + 35);
+    } else {
+        ctx.fillText('Perfect shift!', cx, starY + 35);
+    }
+
+    // Stats cards
+    const cardW = 150;
+    const cardH = 70;
+    const cardGap = 15;
+    const startY = 280;
+
+    const statCards = [
+        { icon: '\u{1F4CB}', label: 'Sorted', value: state.sortedCount, col: COL.postal },
+        { icon: '\u{274C}', label: 'Missorts', value: state.missortCount, col: state.missortCount > 0 ? COL.red : COL.green },
+        { icon: '\u{1F6CE}', label: 'Served', value: state.customersServed, col: COL.green },
+        { icon: '\u{1F525}', label: 'Best Streak', value: state.bestStreak, col: COL.yellow },
+    ];
+
+    statCards.forEach((card, i) => {
+        const row = Math.floor(i / 2);
+        const col = i % 2;
+        const x = cx - cardW - cardGap / 2 + col * (cardW + cardGap);
+        const y = startY + row * (cardH + cardGap);
+
+        // Card bg
+        ctx.fillStyle = COL.white;
+        ctx.shadowColor = COL.shadow;
+        ctx.shadowBlur = 4;
+        drawRoundRect(x, y, cardW, cardH, 10);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Icon + value
+        ctx.fillStyle = card.col;
+        ctx.font = '18px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(card.icon, x + cardW / 2, y + 22);
+
+        ctx.font = 'bold 18px sans-serif';
+        ctx.fillText(card.value, x + cardW / 2 + 18, y + 22);
+
+        // Label
+        ctx.fillStyle = COL.textLight;
+        ctx.font = '11px sans-serif';
+        ctx.fillText(card.label, x + cardW / 2, y + 52);
+    });
+
+    // Coins earned (big, highlighted)
+    const coinsY = startY + 2 * (cardH + cardGap) + 20;
+    ctx.fillStyle = COL.postal;
+    drawRoundRect(cx - 100, coinsY, 200, 50, 12);
+    ctx.fill();
+    ctx.fillStyle = COL.yellow;
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\u{1F4B0} +' + state.dayCoins + ' coins', cx, coinsY + 26);
+
+    // Total
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '12px sans-serif';
+    ctx.fillText('Total: ' + state.coins + ' coins', cx, coinsY + 70);
+
+    // Tap to continue
+    ctx.fillStyle = COL.postal;
+    ctx.globalAlpha = 0.5 + Math.sin(Date.now() * 0.003) * 0.2;
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Tap to continue \u{2192}', cx, CANVAS_H - 80);
 
     ctx.restore();
 }
@@ -1149,70 +1362,117 @@ function drawDayEnd() {
 // ============================================================
 // UPGRADE SCREEN
 // ============================================================
+// Upgrade icon/emoji for each type
+const UPGRADE_ICONS = { capacity: '\u{1F4E6}', speed: '\u{1F3C3}' };
+
 function drawUpgradeScreen() {
     ctx.save();
     ctx.fillStyle = COL.bg;
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Title
+    const cx = CANVAS_W / 2;
+
+    // Header
     ctx.fillStyle = COL.postal;
-    ctx.font = 'bold 24px sans-serif';
+    ctx.font = 'bold 22px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Post Office Upgrades', CANVAS_W / 2, 120);
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Upgrade Your Office', cx, 80);
 
-    // Balance
+    // Balance (prominent)
+    ctx.fillStyle = COL.postal;
+    drawRoundRect(cx - 80, 105, 160, 40, 10);
+    ctx.fill();
     ctx.fillStyle = COL.yellow;
-    ctx.font = 'bold 18px sans-serif';
-    ctx.fillText(state.coins + ' coins', CANVAS_W / 2, 170);
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText('\u{1F4B0} ' + state.coins, cx, 126);
 
-    // Current stats
+    // Current stats summary
     ctx.fillStyle = COL.textLight;
     ctx.font = '13px sans-serif';
-    ctx.fillText('Capacity: ' + state.maxStack + ' | Speed: ' + state.moveSpeed.toFixed(1), CANVAS_W / 2, 210);
+    ctx.fillText('\u{1F4E6} Carry ' + state.maxStack + ' items  \u{2022}  \u{1F3C3} Speed ' + state.moveSpeed.toFixed(1), cx, 170);
 
-    // Upgrade buttons
+    // Upgrade cards
     UPGRADE_DEFS.forEach((def, i) => {
-        const y = 380 + i * 120;
+        const y = 210 + i * 130;
         const cost = getUpgradeCost(def);
         const canAfford = state.coins >= cost;
+        const icon = UPGRADE_ICONS[def.key] || '\u{2B50}';
 
-        // Card
+        // Card bg
         ctx.fillStyle = COL.white;
         ctx.shadowColor = COL.shadow;
-        ctx.shadowBlur = 5;
-        drawRoundRect(60, y, 270, 90, 10);
+        ctx.shadowBlur = 6;
+        drawRoundRect(35, y, CANVAS_W - 70, 110, 12);
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // Title
+        // Left: icon
+        ctx.font = '30px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(icon, 70, y + 35);
+
+        // Title + level
         ctx.fillStyle = COL.text;
         ctx.font = 'bold 16px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText(def.label, 80, y + 25);
+        ctx.fillText(def.label, 100, y + 28);
 
-        // Desc
+        // Level pips
         ctx.fillStyle = COL.textLight;
         ctx.font = '12px sans-serif';
-        ctx.fillText(def.desc + ' (Lv.' + state.upgrades[def.key] + ')', 80, y + 48);
+        ctx.fillText('Level ' + state.upgrades[def.key], 100, y + 48);
 
-        // Cost button
-        ctx.fillStyle = canAfford ? COL.green : COL.wall;
-        drawRoundRect(220, y + 55, 90, 28, 6);
+        // Level bar
+        const barX = 100;
+        const barY = y + 58;
+        const barW = CANVAS_W - 150;
+        const barH = 8;
+        const maxLvl = 10;
+        ctx.fillStyle = '#E0DDD5';
+        drawRoundRect(barX, barY, barW, barH, 4);
+        ctx.fill();
+        const fillW = (state.upgrades[def.key] / maxLvl) * barW;
+        if (fillW > 0) {
+            ctx.fillStyle = COL.postal;
+            drawRoundRect(barX, barY, Math.max(fillW, 8), barH, 4);
+            ctx.fill();
+        }
+
+        // Description
+        ctx.fillStyle = COL.textLight;
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(def.desc, 100, y + 82);
+
+        // Buy button (right side)
+        const btnX = CANVAS_W - 145;
+        const btnY = y + 72;
+        const btnW = 100;
+        const btnH = 32;
+        ctx.fillStyle = canAfford ? COL.green : '#BDBDBD';
+        drawRoundRect(btnX, btnY, btnW, btnH, 8);
         ctx.fill();
         ctx.fillStyle = COL.white;
         ctx.font = 'bold 13px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(cost + ' coins', 265, y + 70);
+        ctx.fillText('\u{1F4B0} ' + cost, btnX + btnW / 2, btnY + btnH / 2 + 1);
     });
 
     // Next Day button
+    const btnY = 490;
     ctx.fillStyle = COL.postal;
-    drawRoundRect(120, 680, 150, 50, 12);
+    drawRoundRect(80, btnY, CANVAS_W - 160, 55, 14);
     ctx.fill();
     ctx.fillStyle = COL.white;
-    ctx.font = 'bold 16px sans-serif';
+    ctx.font = 'bold 18px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('Next Shift →', CANVAS_W / 2, 705);
+    ctx.fillText('\u{1F4EC} Start Day ' + state.day, cx, btnY + 28);
+
+    // Hint
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '11px sans-serif';
+    ctx.fillText('Upgrades carry over between shifts', cx, btnY + 75);
 
     ctx.restore();
 }
