@@ -294,6 +294,19 @@ function onMouseUp(e) {
 
 function handlePointerDown(x, y, id) {
     if (state.screen === 'menu') {
+        // Check reset button
+        if (state.daysCompleted > 0 && state._resetBtnY && y > state._resetBtnY && y < state._resetBtnY + 35 && x > 130 && x < 260) {
+            localStorage.removeItem('postHaste');
+            state.day = 1;
+            state.totalCoins = 0;
+            state.coins = 0;
+            state.totalStars = 0;
+            state.daysCompleted = 0;
+            state.upgrades = { capacity: 0, speed: 0, sortSpeed: 0 };
+            state.maxStack = 3;
+            state.moveSpeed = PLAYER_SPEED_BASE;
+            return;
+        }
         startDay();
         return;
     }
@@ -1318,6 +1331,20 @@ function drawMenu() {
     ctx.font = 'bold 18px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(state.daysCompleted > 0 ? '\u{1F4EC} Next Shift' : '\u{1F4EC} Start Shift', cx, y + 26);
+
+    // Reset button (below start)
+    if (state.daysCompleted > 0) {
+        y += 60;
+        ctx.fillStyle = COL.red;
+        ctx.globalAlpha = 0.7;
+        drawRoundRect(130, y, 130, 35, 8);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = COL.white;
+        ctx.font = 'bold 13px sans-serif';
+        ctx.fillText('Reset Progress', cx, y + 18);
+        state._resetBtnY = y; // store for tap detection
+    }
 
     // DuckDuckWeasel
     ctx.font = '11px sans-serif';
