@@ -531,8 +531,9 @@ function startDay() {
 function endDay() {
     state.screen = 'dayEnd';
 
-    // Calculate stars (tuned for 90s days)
-    let stars = 1;
+    // Calculate stars (tuned for 60s days)
+    let stars = 0;
+    if (state.sortedCount >= 3) stars = 1;
     if (state.sortedCount >= 6 && state.missortCount <= 2) stars = 2;
     if (state.sortedCount >= 12 && state.missortCount === 0) stars = 3;
 
@@ -1355,13 +1356,15 @@ function drawDayEnd() {
         ctx.fillText('\u{2B50}', cx - 60 + i * 60, starY);
     }
 
-    // Star requirements hint
+    // Star requirements hint — show next goal
     ctx.fillStyle = COL.textLight;
     ctx.font = '11px sans-serif';
-    if (state.dayStars < 2) {
-        ctx.fillText('\u{2B50}\u{2B50} Sort 10+ with 2 or fewer mistakes', cx, starY + 35);
-    } else if (state.dayStars < 3) {
-        ctx.fillText('\u{2B50}\u{2B50}\u{2B50} Sort 20+ with zero mistakes', cx, starY + 35);
+    if (state.dayStars === 0) {
+        ctx.fillText('Sort at least 3 items to earn a star', cx, starY + 35);
+    } else if (state.dayStars === 1) {
+        ctx.fillText('Next: sort 6+ with 2 or fewer mistakes', cx, starY + 35);
+    } else if (state.dayStars === 2) {
+        ctx.fillText('Next: sort 12+ with zero mistakes', cx, starY + 35);
     } else {
         ctx.fillText('Perfect shift!', cx, starY + 35);
     }
