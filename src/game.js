@@ -422,18 +422,21 @@ function handleSortSwipe(endX, endY) {
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
         floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 95, COL.green, 22));
-        // VFX: soft sparkles on correct sort
-        spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.green, 6, 'sparkle');
-        // Extra sparkle on streak milestones
-        if (state.streak >= 5 && state.streak % 5 === 0) {
-            spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.streakGlow, 10, 'confetti');
+        // VFX: sparkles on correct sort + soft bump
+        spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.green, 10, 'sparkle');
+        addBump(0, -2); // subtle upward nudge
+        // Extra burst on streak milestones
+        if (state.streak >= 3 && state.streak % 3 === 0) {
+            spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.streakGlow, 16, 'confetti');
+            addBump(0, -4);
         }
     } else {
         // Wrong sort — bounces back
         state.streak = 0;
         state.missortCount++;
         floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
-        addShake(3);
+        addShake(5);
+        addBump((Math.random() - 0.5) * 4, 2);
     }
 
     // Next item or exit sort mode
@@ -520,17 +523,21 @@ let particles = [];
 
 function spawnParticles(x, y, col, count, style) {
     for (let i = 0; i < count; i++) {
-        const angle = (Math.PI * 2 * i / count) + (Math.random() - 0.5) * 0.5;
-        const speed = 20 + Math.random() * 40;
+        const angle = (Math.PI * 2 * i / count) + (Math.random() - 0.5) * 0.8;
+        const speed = 50 + Math.random() * 80;
+        const sizeMap = { sparkle: 5 + Math.random() * 6, confetti: 6 + Math.random() * 6, rise: 4 + Math.random() * 5, burst: 5 + Math.random() * 7 };
+        const speedMap = { burst: 1.8, rise: 0.8, sparkle: 1.0, confetti: 1.4 };
+        const st = style || 'burst';
         particles.push({
-            x, y,
-            vx: Math.cos(angle) * speed * (style === 'burst' ? 1.5 : 0.6),
-            vy: Math.sin(angle) * speed * (style === 'burst' ? 1.5 : 0.6) - (style === 'rise' ? 30 : 0),
-            life: 0.6 + Math.random() * 0.5,
-            maxLife: 0.6 + Math.random() * 0.5,
-            size: style === 'sparkle' ? 2 + Math.random() * 3 : 3 + Math.random() * 4,
+            x: x + (Math.random() - 0.5) * 20,
+            y: y + (Math.random() - 0.5) * 20,
+            vx: Math.cos(angle) * speed * (speedMap[st] || 1),
+            vy: Math.sin(angle) * speed * (speedMap[st] || 1) - (st === 'rise' ? 60 : 0),
+            life: 0.8 + Math.random() * 0.6,
+            maxLife: 0.8 + Math.random() * 0.6,
+            size: sizeMap[st] || 5,
             col,
-            style: style || 'burst',
+            style: st,
         });
     }
 }
@@ -540,7 +547,8 @@ function updateParticles(dt) {
         const p = particles[i];
         p.x += p.vx * dt;
         p.y += p.vy * dt;
-        p.vy += 15 * dt; // gentle gravity
+        p.vx *= 0.98; // gentle drag
+        p.vy += 20 * dt; // gentle gravity
         p.life -= dt;
         if (p.life <= 0) particles.splice(i, 1);
     }
@@ -550,26 +558,33 @@ function drawParticles() {
     for (const p of particles) {
         ctx.save();
         const t = p.life / p.maxLife;
-        ctx.globalAlpha = t * 0.7;
+        ctx.globalAlpha = t * 0.9;
 
         if (p.style === 'sparkle') {
-            // Soft diamond sparkle
-            const s = p.size * t;
+            // Rotating diamond sparkle
+            const s = p.size * (0.4 + t * 0.6);
             ctx.fillStyle = p.col;
             ctx.translate(p.x, p.y);
-            ctx.rotate(Date.now() * 0.003 + p.maxLife);
+            ctx.rotate(Date.now() * 0.005 + p.maxLife * 10);
             ctx.fillRect(-s / 2, -s / 2, s, s);
         } else if (p.style === 'confetti') {
-            // Soft rounded confetti
+            // Tumbling confetti rectangle
             ctx.fillStyle = p.col;
             const s = p.size * (0.5 + t * 0.5);
-            drawRoundRect(p.x - s / 2, p.y - s / 2, s, s * 0.6, 2);
-            ctx.fill();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(Date.now() * 0.004 + p.maxLife * 7);
+            ctx.fillRect(-s / 2, -s * 0.3, s, s * 0.6);
         } else {
-            // Soft circle (burst/rise)
+            // Soft glowing circle
             ctx.fillStyle = p.col;
+            const s = p.size * (0.3 + t * 0.7);
             ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size * t, 0, Math.PI * 2);
+            ctx.arc(p.x, p.y, s, 0, Math.PI * 2);
+            ctx.fill();
+            // Glow halo
+            ctx.globalAlpha = t * 0.3;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, s * 1.8, 0, Math.PI * 2);
             ctx.fill();
         }
         ctx.restore();
@@ -577,20 +592,48 @@ function drawParticles() {
 }
 
 // ============================================================
-// SCREEN SHAKE — gentle wobble for impacts
+// SCREEN EFFECTS — shake + subtle sway/bump on events
 // ============================================================
-let screenShake = { amount: 0, decay: 0.9 };
+let screenShake = { amount: 0, decay: 0.88 };
+
+// Smooth bump — a soft push that eases back (not jarring like shake)
+let screenBump = { x: 0, y: 0 };
 
 function addShake(amount) {
-    screenShake.amount = Math.min(screenShake.amount + amount, 6);
+    screenShake.amount = Math.min(screenShake.amount + amount, 8);
 }
 
-function getShakeOffset() {
-    if (screenShake.amount < 0.5) return { x: 0, y: 0 };
-    return {
-        x: (Math.random() - 0.5) * screenShake.amount * 2,
-        y: (Math.random() - 0.5) * screenShake.amount * 2,
-    };
+function addBump(dx, dy) {
+    screenBump.x += dx;
+    screenBump.y += dy;
+}
+
+function getScreenOffset() {
+    // Combine shake + bump + ambient sway
+    let ox = 0, oy = 0;
+
+    // Shake (random jitter, for mistakes)
+    if (screenShake.amount > 0.3) {
+        ox += (Math.random() - 0.5) * screenShake.amount * 2;
+        oy += (Math.random() - 0.5) * screenShake.amount * 2;
+    }
+
+    // Bump (smooth push, eases back)
+    ox += screenBump.x;
+    oy += screenBump.y;
+
+    // Ambient breathing sway (very subtle, always present)
+    const t = Date.now() * 0.001;
+    ox += Math.sin(t * 0.7) * 0.4;
+    oy += Math.sin(t * 0.5) * 0.3;
+
+    return { x: ox, y: oy };
+}
+
+function updateScreenEffects() {
+    screenShake.amount *= screenShake.decay;
+    screenBump.x *= 0.85;
+    screenBump.y *= 0.85;
 }
 
 // ============================================================
@@ -733,7 +776,8 @@ function update(dt) {
         }
         if (state.stack.length > hadItems) {
             const sc = stationCenter(STATIONS.incoming);
-            spawnParticles(sc.x, sc.y, COL.brown, 4, 'rise');
+            spawnParticles(sc.x, sc.y, COL.brown, 8, 'rise');
+            addBump(0, -1.5);
         }
     }
 
@@ -753,7 +797,8 @@ function update(dt) {
         state.dayCoins += cust.coins;
         floatingTexts.push(createFloatingText('+' + cust.coins + ' tip', STATIONS.counter.x + STATIONS.counter.w / 2, STATIONS.counter.y - 30, COL.green, 18));
         const cc = stationCenter(STATIONS.counter);
-        spawnParticles(cc.x, cc.y, COL.yellow, 5, 'sparkle');
+        spawnParticles(cc.x, cc.y, COL.yellow, 8, 'sparkle');
+        addBump(0, -2);
     }
 
     // OUTGOING: Deposit sorted mail
@@ -764,13 +809,14 @@ function update(dt) {
         state.dayCoins += bonus;
         floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.postal, 18));
         const oc = stationCenter(STATIONS.outgoing);
-        spawnParticles(oc.x, oc.y, COL.postal, 6, 'burst');
+        spawnParticles(oc.x, oc.y, COL.postal, 10, 'burst');
+        addBump(0, -3);
         state.outgoingPile = [];
     }
 
     updateFloatingTexts(dt);
     updateParticles(dt);
-    screenShake.amount *= screenShake.decay;
+    updateScreenEffects();
 }
 
 // ============================================================
@@ -1694,12 +1740,10 @@ function gameLoop(timestamp) {
 function render() {
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // Apply screen shake
-    const shake = getShakeOffset();
-    if (shake.x || shake.y) {
-        ctx.save();
-        ctx.translate(shake.x, shake.y);
-    }
+    // Apply screen effects (shake + bump + sway)
+    const shake = getScreenOffset();
+    ctx.save();
+    ctx.translate(shake.x, shake.y);
 
     switch (state.screen) {
         case 'menu':
@@ -1732,10 +1776,7 @@ function render() {
             break;
     }
 
-    // End screen shake transform
-    if (shake.x || shake.y) {
-        ctx.restore();
-    }
+    ctx.restore();
 }
 
 // ============================================================
