@@ -350,9 +350,9 @@ const state = {
     // Joystick
     joy: { active: false, touchId: null, baseX: 0, baseY: 0, knobX: 0, knobY: 0, dx: 0, dy: 0 },
 
-    // Timers
-    lastMailSpawn: 0,
-    lastCustomerSpawn: 0,
+    // Timers (game-time accumulators in seconds)
+    mailSpawnAcc: 0,
+    customerSpawnAcc: 0,
     dayTimer: null,
 
     // Upgrades
@@ -369,6 +369,12 @@ const state = {
     // Tutorial / hints
     hintTimer: 0,
     hintsShown: {},  // track which hints the player has seen
+
+    // Onboarding (day 1 guided tutorial)
+    tutorialStep: 0,        // 0=move, 1=pickup, 2=sort, 3=sendout, 4=done
+    tutorialComplete: false, // true after first full cycle
+    playerHasMoved: false,   // tracks if player has ever moved
+    youIndicatorTimer: 0,    // seconds the "YOU" arrow has been showing
 };
 
 // ============================================================
@@ -384,6 +390,7 @@ function save() {
         maxStack: state.maxStack,
         moveSpeed: state.moveSpeed,
         layout: layout,
+        tutorialComplete: state.tutorialComplete,
     };
     localStorage.setItem('postHaste', JSON.stringify(data));
 }
@@ -401,6 +408,7 @@ function load() {
         state.daysCompleted = data.daysCompleted || 0;
         state.maxStack = data.maxStack || 3;
         state.moveSpeed = data.moveSpeed || PLAYER_SPEED_BASE;
+        state.tutorialComplete = data.tutorialComplete || false;
         if (data.layout) {
             layout = data.layout;
             rebuildStations();
@@ -686,7 +694,7 @@ function handleSortSwipe(endX, endY) {
         state.streak++;
         if (state.streak > state.bestStreak) state.bestStreak = state.streak;
         const multiplier = Math.min(1 + (state.streak - 1) * 0.5, 3);
-        const earned = Math.floor(state.sortItem.isParcel ? 6 * multiplier : 3 * multiplier);
+        const earned = Math.floor(state.sortItem.isParcel ? 5 * multiplier : 2 * multiplier);
         state.dayCoins += earned;
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
@@ -724,6 +732,8 @@ function handleSortSwipe(endX, endY) {
     } else {
         state.sortItem = null;
         state.screen = 'playing';
+        // Tutorial: done sorting, now guide to sendout
+        if (!state.tutorialComplete && state.tutorialStep <= 2) state.tutorialStep = 3;
     }
 }
 
@@ -735,7 +745,7 @@ const UPGRADE_DEFS = [
         key: 'capacity',
         label: 'Carry Capacity',
         desc: '+1 mail per trip',
-        baseCost: 50,
+        baseCost: 75,
         costMult: 2.2,
         apply: () => { state.maxStack = 3 + state.upgrades.capacity + 1; },
     },
@@ -743,7 +753,7 @@ const UPGRADE_DEFS = [
         key: 'speed',
         label: 'Move Speed',
         desc: 'Walk a bit faster',
-        baseCost: 40,
+        baseCost: 60,
         costMult: 2.0,
         apply: () => { state.moveSpeed = PLAYER_SPEED_BASE + (state.upgrades.speed + 1) * 0.2; },
     },
@@ -1185,8 +1195,15 @@ function startDay() {
     state.player.x = 195;
     state.player.y = 350;
     state.joy.active = false;
-    state.lastMailSpawn = Date.now();
-    state.lastCustomerSpawn = Date.now();
+    state.mailSpawnAcc = 0;
+    state.customerSpawnAcc = 0;
+
+    // Tutorial: reset for day 1 if not yet completed
+    if (!state.tutorialComplete) {
+        state.tutorialStep = 0;
+        state.playerHasMoved = false;
+        state.youIndicatorTimer = 0;
+    }
     floatingTexts = [];
     particles = [];
     state.milestone = null;
@@ -1211,7 +1228,7 @@ function startDay() {
     }
 
     // Seed initial mail — start busy, scale with day
-    const seedCount = Math.min(3 + Math.floor(state.day / 3), 8);
+    const seedCount = Math.min(2 + Math.floor(state.day / 5), 5);
     for (let i = 0; i < seedCount; i++) {
         state.incomingPile.push(createMail());
     }
@@ -1268,8 +1285,6 @@ function update(dt) {
 
     if (state.screen !== 'playing') return;
 
-    const now = Date.now();
-
     // Day timer
     dayTimerAcc += dt;
     if (dayTimerAcc >= 1) {
@@ -1281,22 +1296,24 @@ function update(dt) {
         }
     }
 
-    // Spawn mail at incoming
-    const mailInterval = Math.max(800, MAIL_SPAWN_INTERVAL_BASE - state.day * 150);
-    if (now - state.lastMailSpawn > mailInterval && state.incomingPile.length < 10) {
+    // Spawn mail at incoming (game-time based)
+    const mailInterval = Math.max(3, 6 - state.day * 0.15);
+    state.mailSpawnAcc += dt;
+    if (state.mailSpawnAcc >= mailInterval && state.incomingPile.length < 8) {
         state.incomingPile.push(createMail());
-        state.lastMailSpawn = now;
+        state.mailSpawnAcc = 0;
     }
 
-    // Spawn customers
-    const custInterval = Math.max(2500, CUSTOMER_SPAWN_INTERVAL_BASE - state.day * 300);
-    if (now - state.lastCustomerSpawn > custInterval && state.customers.length < 3) {
+    // Spawn customers (game-time based)
+    const custInterval = Math.max(8, 15 - state.day * 0.3);
+    state.customerSpawnAcc += dt;
+    if (state.customerSpawnAcc >= custInterval && state.customers.length < 3) {
         state.customers.push({
             id: Date.now(),
             patience: state.currentPatience || CUSTOMER_PATIENCE,
-            coins: 3 + Math.floor(Math.random() * 7),
+            coins: 4 + Math.floor(Math.random() * 6),
         });
-        state.lastCustomerSpawn = now;
+        state.customerSpawnAcc = 0;
     }
 
     // Update customers (patience)
@@ -1342,6 +1359,13 @@ function update(dt) {
     state.player.x = Math.max(OFFICE.x + margin, Math.min(OFFICE.x + OFFICE.w - margin, px));
     state.player.y = Math.max(OFFICE.y + margin, Math.min(OFFICE.y + OFFICE.h - margin, py));
 
+    // Track if player has ever moved (for tutorial/YOU indicator)
+    if (!state.playerHasMoved && (Math.abs(state.joy.dx) > 0.1 || Math.abs(state.joy.dy) > 0.1)) {
+        state.playerHasMoved = true;
+        // Tutorial: they figured out movement, now point to pickup
+        if (!state.tutorialComplete && state.tutorialStep === 0) state.tutorialStep = 1;
+    }
+
     // Proximity checks (only when not moving fast — prevents drive-by)
     const isMoving = Math.abs(state.joy.dx) > 0.3 || Math.abs(state.joy.dy) > 0.3;
 
@@ -1356,6 +1380,8 @@ function update(dt) {
             spawnParticles(sc.x, sc.y, COL.brown, 8, 'rise');
             addBump(0, -1.5);
             sfxPickup();
+            // Tutorial: advance past pickup step
+            if (!state.tutorialComplete && state.tutorialStep <= 1) state.tutorialStep = 2;
         }
     }
 
@@ -1366,6 +1392,7 @@ function update(dt) {
         state.joy.active = false;
         state.joy.dx = 0;
         state.joy.dy = 0;
+        // Tutorial: they found sort, step will advance to sendout after sort completes
     }
 
     // COUNTER: Serve customers
@@ -1385,11 +1412,18 @@ function update(dt) {
     if (nearStation('outgoing') && state.outgoingPile.length > 0) {
         const delivered = state.outgoingPile.length;
         state.mailDelivered += delivered;
-        const bonus = Math.floor(delivered * 1.5);
+        // Batch bonus: more items dispatched at once = better per-item rate
+        const batchMultiplier = 1 + Math.min(delivered, 5) * 0.2;
+        const bonus = Math.floor(delivered * 2 * batchMultiplier);
         state.dayCoins += bonus;
         floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.red, 18));
         const oc = stationCenter(STATIONS.outgoing);
         spawnParticles(oc.x, oc.y, COL.postal, 10, 'burst');
+        // Tutorial: completed full cycle!
+        if (!state.tutorialComplete && state.tutorialStep <= 3) {
+            state.tutorialStep = 4;
+            state.tutorialComplete = true;
+        }
         addBump(0, -3);
         sfxDispatch();
         state.outgoingPile = [];
@@ -1420,6 +1454,14 @@ function drawStation(key) {
     const cx = s.x + s.w / 2;
     const cy = s.y + s.h / 2;
     ctx.save();
+
+    // Tutorial: dim stations that aren't the current target
+    if (!state.tutorialComplete && state.screen === 'playing') {
+        const target = getNavTarget();
+        if (target && target !== key) {
+            ctx.globalAlpha = 0.3;
+        }
+    }
 
     // Shadow
     ctx.fillStyle = COL.shadow;
@@ -1822,8 +1864,13 @@ function drawJoystick() {
     const jx = state.joy.active ? state.joy.baseX : CANVAS_W / 2;
     const jy = state.joy.active ? state.joy.baseY : CANVAS_H - 100;
 
+    // Much more visible before first move so players know it exists
+    const neverMoved = !state.playerHasMoved;
+    const baseAlpha = state.joy.active ? 0.4 : (neverMoved ? 0.5 : 0.15);
+    const knobAlpha = state.joy.active ? 0.6 : (neverMoved ? 0.7 : 0.25);
+
     ctx.save();
-    ctx.globalAlpha = state.joy.active ? 0.4 : 0.15;
+    ctx.globalAlpha = baseAlpha;
 
     // Base
     ctx.fillStyle = COL.text;
@@ -1831,14 +1878,184 @@ function drawJoystick() {
     ctx.arc(jx, jy, JOY_RADIUS, 0, Math.PI * 2);
     ctx.fill();
 
+    // "DRAG" label when player hasn't moved
+    if (neverMoved) {
+        ctx.globalAlpha = 0.6 + Math.sin(Date.now() * 0.004) * 0.2;
+        ctx.fillStyle = COL.white;
+        ctx.font = 'bold 12px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('DRAG', jx, jy - JOY_RADIUS - 14);
+        ctx.globalAlpha = baseAlpha;
+    }
+
     // Knob
-    ctx.globalAlpha = state.joy.active ? 0.6 : 0.25;
+    ctx.globalAlpha = knobAlpha;
     ctx.fillStyle = COL.postal;
     const kx = state.joy.active ? state.joy.knobX : jx;
     const ky = state.joy.active ? state.joy.knobY : jy;
     ctx.beginPath();
     ctx.arc(kx, ky, JOY_KNOB, 0, Math.PI * 2);
     ctx.fill();
+
+    ctx.restore();
+}
+
+// ============================================================
+// NAVIGATION + TUTORIAL DRAWING
+// ============================================================
+
+// Returns the station key the player should go to right now, or null
+function getNavTarget() {
+    if (!state.tutorialComplete) {
+        // Guided tutorial: explicit step targets
+        if (state.tutorialStep === 0) return null; // waiting to move
+        if (state.tutorialStep === 1) return 'incoming';
+        if (state.tutorialStep === 2) return 'sorting';
+        if (state.tutorialStep === 3) return 'outgoing';
+        return null;
+    }
+    // Post-tutorial: context-based nav
+    if (state.stack.length === 0 && state.incomingPile.length > 0) return 'incoming';
+    if (stackWeight() >= state.maxStack) return 'sorting';
+    if (state.stack.length > 0 && state.outgoingPile.length === 0) return 'sorting';
+    if (state.outgoingPile.length > 0) return 'outgoing';
+    if (state.customers.length > 0 && state.stack.length === 0) return 'counter';
+    return null;
+}
+
+// Big pulsing arrow from player to target station
+function drawNavArrow() {
+    const target = getNavTarget();
+    if (!target) return;
+
+    const s = STATIONS[target];
+    const sc = stationCenter(s);
+    const px = state.player.x;
+    const py = state.player.y;
+
+    const dx = sc.x - px;
+    const dy = sc.y - py;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < 40) return; // close enough, don't draw
+
+    const angle = Math.atan2(dy, dx);
+    const pulse = 0.5 + Math.sin(Date.now() * 0.006) * 0.3;
+
+    ctx.save();
+    ctx.globalAlpha = pulse;
+
+    // Dashed line from player to station
+    ctx.strokeStyle = COL.yellow;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(px + Math.cos(angle) * 25, py + Math.sin(angle) * 25);
+    ctx.lineTo(sc.x - Math.cos(angle) * 30, sc.y - Math.sin(angle) * 30);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Arrow head at target end
+    const tipX = sc.x - Math.cos(angle) * 28;
+    const tipY = sc.y - Math.sin(angle) * 28;
+    const headLen = 14;
+    ctx.fillStyle = COL.yellow;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - headLen * Math.cos(angle - 0.4), tipY - headLen * Math.sin(angle - 0.4));
+    ctx.lineTo(tipX - headLen * Math.cos(angle + 0.4), tipY - headLen * Math.sin(angle + 0.4));
+    ctx.closePath();
+    ctx.fill();
+
+    // Big label near the target: "GO HERE" for tutorial, station label otherwise
+    const labelDist = 45;
+    const lx = sc.x - Math.cos(angle) * labelDist;
+    const ly = sc.y - Math.sin(angle) * labelDist - 18;
+    ctx.globalAlpha = pulse + 0.2;
+    ctx.fillStyle = COL.yellow;
+    const label = !state.tutorialComplete ? 'GO HERE' : s.label;
+    const labelW = ctx.measureText ? 80 : 60;
+    drawRoundRect(lx - labelW / 2, ly - 12, labelW, 24, 8);
+    ctx.fill();
+    ctx.fillStyle = COL.text;
+    ctx.font = 'bold 13px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, lx, ly);
+
+    ctx.restore();
+}
+
+// "YOU ↓" bouncing indicator above the player
+function drawYouIndicator() {
+    // Show during tutorial, or if player hasn't moved yet
+    if (state.tutorialComplete && state.playerHasMoved) return;
+
+    const px = state.player.x;
+    const py = state.player.y;
+    const bounce = Math.sin(Date.now() * 0.005) * 6;
+    const arrowY = py - 50 + bounce;
+
+    ctx.save();
+    const pulse = 0.7 + Math.sin(Date.now() * 0.004) * 0.3;
+    ctx.globalAlpha = pulse;
+
+    // Pill background
+    ctx.fillStyle = COL.yellow;
+    drawRoundRect(px - 25, arrowY - 14, 50, 22, 8);
+    ctx.fill();
+
+    // "YOU" text
+    ctx.fillStyle = COL.text;
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('YOU', px, arrowY - 3);
+
+    // Down arrow pointing at character
+    ctx.fillStyle = COL.yellow;
+    ctx.beginPath();
+    ctx.moveTo(px, arrowY + 12);
+    ctx.lineTo(px - 8, arrowY + 6);
+    ctx.lineTo(px + 8, arrowY + 6);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+}
+
+// Tutorial step message — big clear instruction at middle of screen
+function drawTutorialOverlay() {
+    if (state.tutorialComplete) return;
+
+    const messages = [
+        'DRAG the bottom of the screen to MOVE',
+        'Walk to the MAIL IN station',
+        'Walk to the SORT desk — stop moving to sort',
+        'Walk to SEND OUT to deliver your mail!',
+    ];
+    const msg = messages[state.tutorialStep];
+    if (!msg) return;
+
+    const cx = CANVAS_W / 2;
+    const y = CANVAS_H - 170;
+
+    ctx.save();
+    const pulse = 0.75 + Math.sin(Date.now() * 0.003) * 0.15;
+    ctx.globalAlpha = pulse;
+
+    // Dark pill background
+    const pillW = CANVAS_W - 40;
+    ctx.fillStyle = 'rgba(30,40,60,0.9)';
+    drawRoundRect(cx - pillW / 2, y - 18, pillW, 36, 12);
+    ctx.fill();
+
+    // Bright text
+    ctx.fillStyle = COL.yellow;
+    ctx.font = 'bold 15px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(msg, cx, y);
 
     ctx.restore();
 }
@@ -1928,6 +2145,9 @@ function drawHUD() {
 }
 
 function getContextHint() {
+    // During tutorial, the overlay handles messaging — skip HUD hints
+    if (!state.tutorialComplete) return null;
+
     // Priority-based hints — show the most relevant one
     if (state.stack.length === 0 && state.incomingPile.length > 0) {
         return '\u{1F449} Walk to MAIL IN to collect mail';
@@ -2704,10 +2924,13 @@ function render() {
             ctx.fillStyle = COL.bg;
             ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
             drawOffice();
+            drawNavArrow();
             drawParticles();
             drawPlayer();
+            drawYouIndicator();
             drawJoystick();
             drawHUD();
+            drawTutorialOverlay();
             drawFloatingTexts();
             drawMilestone();
             drawOutgoingTimer();

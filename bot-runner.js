@@ -80,14 +80,15 @@ const {
 // ============================================================
 // Runner config
 // ============================================================
-const NUM_BOTS = parseInt(process.argv[2]) || 10;
+const BOTS_PER_PROFILE = parseInt(process.argv[2]) || 3;
 const DAYS_EACH = parseInt(process.argv[3]) || 30;
 const SPEED_MULT = 20;
+const NUM_BOTS = BOT_PROFILES.length * BOTS_PER_PROFILE;
 
 const resultsDir = path.join(__dirname, 'bot-results');
 if (!fs.existsSync(resultsDir)) fs.mkdirSync(resultsDir);
 
-console.log(`Running ${NUM_BOTS} bots, ${DAYS_EACH} days each...`);
+console.log(`Running ${NUM_BOTS} bots (${BOTS_PER_PROFILE} per profile × ${BOT_PROFILES.length} profiles), ${DAYS_EACH} days each...`);
 
 // ============================================================
 // Run simulations
@@ -95,8 +96,9 @@ console.log(`Running ${NUM_BOTS} bots, ${DAYS_EACH} days each...`);
 const allRuns = [];
 
 for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
-    // Pick a random profile for variety
-    const profileIdx = botIdx % BOT_PROFILES.length;
+    // 3 bots per profile — same skill level, different RNG seeds
+    const profileIdx = Math.floor(botIdx / BOTS_PER_PROFILE);
+    const runWithinProfile = botIdx % BOTS_PER_PROFILE;
     const profile = BOT_PROFILES[profileIdx];
 
     // Reset everything
@@ -405,13 +407,14 @@ console.log('\n');
 // Save results
 // ============================================================
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-const filename = `${timestamp}_${NUM_BOTS}bots_${DAYS_EACH}days.json`;
+const filename = `${timestamp}_${NUM_BOTS}bots_${BOTS_PER_PROFILE}each_${DAYS_EACH}days.json`;
 const filepath = path.join(resultsDir, filename);
 
 const output = {
     meta: {
         timestamp: new Date().toISOString(),
         numBots: NUM_BOTS,
+        botsPerProfile: BOTS_PER_PROFILE,
         daysEach: DAYS_EACH,
         dayLengthSeconds: DAY_BASE_TIME,
         profiles: BOT_PROFILES.map(p => p.name),
@@ -473,3 +476,37 @@ for (const r of allRuns) {
     }
 }
 if (warnings === 0) console.log('  None — all bots ran clean');
+
+// Per-profile variance analysis
+console.log('\n=== PROFILE VARIANCE (same skill, different runs) ===\n');
+const byProfile = {};
+for (const r of allRuns) {
+    if (!byProfile[r.profile]) byProfile[r.profile] = [];
+    byProfile[r.profile].push(r);
+}
+for (const [name, runs] of Object.entries(byProfile)) {
+    const coins = runs.map(r => r.avgCoinsPerDay);
+    const sorted = runs.map(r => r.totalSorted);
+    const stars = runs.map(r => r.totalStars);
+    const routes = runs.map(r => r.uniqueRoutePatterns);
+    const avg = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+    const spread = arr => Math.max(...arr) - Math.min(...arr);
+    const cv = arr => { const m = avg(arr); return m > 0 ? ((Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length) / m) * 100).toFixed(1) : '0.0'; };
+
+    console.log(`  ${name.toUpperCase()} (×${runs.length}):`);
+    console.log(`    coins/day: ${coins.map(c => c.toFixed(0)).join(', ')}  (spread: ${spread(coins).toFixed(0)}, CV: ${cv(coins)}%)`);
+    console.log(`    sorted:    ${sorted.join(', ')}  (spread: ${spread(sorted)}, CV: ${cv(sorted)}%)`);
+    console.log(`    stars:     ${stars.join(', ')}  (spread: ${spread(stars)}, CV: ${cv(stars)}%)`);
+    console.log(`    routes:    ${routes.join(', ')}  (spread: ${spread(routes)})`);
+
+    // Flag if bots at same level are too similar (suggests deterministic gameplay)
+    if (cv(coins) < 3) {
+        console.log(`    ⚠ VERY LOW VARIANCE — coins/day CV < 3%, gameplay may be too deterministic at this level`);
+        warnings++;
+    }
+    // Flag if bots at same level are wildly different (suggests unbalanced RNG)
+    if (cv(coins) > 30) {
+        console.log(`    ⚠ HIGH VARIANCE — coins/day CV > 30%, RNG swings may dominate skill`);
+        warnings++;
+    }
+}
