@@ -42,31 +42,41 @@ const GRID_ROWS = 7;
 const GRID_CELL_W = Math.floor((CANVAS_W - 40) / GRID_COLS); // ~70
 const GRID_CELL_H = Math.floor(530 / GRID_ROWS);              // ~75
 
-// Blocked cells: pillars and fixed features [col, row]
+// Blocked cells: pillars and walls [col, row]
 const BLOCKED_CELLS = [
-    [2, 3], // centre pillar
-    [1, 5], // bottom-left pillar
+    [2, 2], // centre pillar
+    [0, 4], // left wall feature
+    [2, 5], // lower pillar
+    [4, 3], // right wall feature
 ];
 // Fixed features (drawn but not placeable)
 const FIXED_FEATURES = [
-    { col: 4, row: 0, label: 'DOOR', icon: '\u{1F6AA}', col2: '#888' },       // customer entrance top-right
-    { col: 4, row: 6, label: 'DOCK', icon: '\u{1F6E4}', col2: '#888' },       // loading dock bottom-right
+    { col: 4, row: 0, label: 'DOOR', icon: '\u{1F6AA}' },       // customer entrance top-right
+    { col: 0, row: 6, label: 'DOCK', icon: '\u{1F69B}' },       // loading dock bottom-left
 ];
 
-// Station definitions — icons + descriptive labels
+// Station definitions — with placement constraints
 const STATION_DEFS = {
-    incoming: { w: 70, h: 55, label: 'MAIL IN', icon: '\u{1F4E8}', col: COL.brown },
-    sorting:  { w: 80, h: 60, label: 'SORT', icon: '\u{1F4CB}', col: COL.postal },
-    counter:  { w: 75, h: 55, label: 'SERVE', icon: '\u{1F6CE}', col: COL.green },
-    outgoing: { w: 75, h: 55, label: 'SEND OUT', icon: '\u{1F69A}', col: COL.red },
+    incoming: { w: 70, h: 55, label: 'MAIL IN', icon: '\u{1F4E8}', col: COL.brown,
+        constraint: 'Must be near DOCK (within 2 cells)',
+        check: (c, r) => Math.abs(c - 0) + Math.abs(r - 6) <= 3 },  // near dock
+    sorting:  { w: 80, h: 60, label: 'SORT', icon: '\u{1F4CB}', col: COL.postal,
+        constraint: 'Middle rows only (rows 2-5)',
+        check: (c, r) => r >= 2 && r <= 5 },  // must be in centre area
+    counter:  { w: 75, h: 55, label: 'SERVE', icon: '\u{1F6CE}', col: COL.green,
+        constraint: 'Must be near DOOR (within 2 cells)',
+        check: (c, r) => Math.abs(c - 4) + Math.abs(r - 0) <= 3 },  // near door
+    outgoing: { w: 75, h: 55, label: 'SEND OUT', icon: '\u{1F69A}', col: COL.red,
+        constraint: 'Must be near DOCK (within 2 cells)',
+        check: (c, r) => Math.abs(c - 0) + Math.abs(r - 6) <= 3 },  // near dock
 };
 
 // Default grid positions [col, row] for each station
 const DEFAULT_LAYOUT = {
-    incoming: [0, 1],
-    sorting:  [2, 4],
+    incoming: [1, 5],
+    sorting:  [2, 3],
     counter:  [3, 1],
-    outgoing: [3, 5],
+    outgoing: [0, 5],
 };
 
 // Current layout (mutable, saved/loaded)
@@ -838,16 +848,22 @@ function handleLayoutDown(x, y) {
     }
 }
 
+function canPlaceStation(key, col, row) {
+    if (isCellBlocked(col, row)) return false;
+    if (isCellOccupied(col, row, key)) return false;
+    const def = STATION_DEFS[key];
+    if (def.check && !def.check(col, row)) return false;
+    return true;
+}
+
 function handleLayoutDrop(x, y) {
     if (!state.layoutDrag) return;
     const drag = state.layoutDrag;
     const [gc, gr] = pixelToGrid(x, y);
 
-    // Can we place here?
-    if (!isCellBlocked(gc, gr) && !isCellOccupied(gc, gr, drag.key)) {
+    if (canPlaceStation(drag.key, gc, gr)) {
         layout[drag.key] = [gc, gr];
     }
-    // Otherwise it snaps back to original position
 
     state.layoutDrag = null;
     rebuildStations();
@@ -946,12 +962,25 @@ function drawLayoutEditor() {
         const dx = drag.curX - GRID_CELL_W / 2;
         const dy = drag.curY - GRID_CELL_H / 2;
 
+        // Show valid zone for this station
+        for (let c = 0; c < GRID_COLS; c++) {
+            for (let r = 0; r < GRID_ROWS; r++) {
+                if (canPlaceStation(drag.key, c, r)) {
+                    const zx = OFFICE.x + c * GRID_CELL_W;
+                    const zy = OFFICE.y + r * GRID_CELL_H;
+                    ctx.fillStyle = 'rgba(74,140,92,0.12)';
+                    drawRoundRect(zx + 2, zy + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
+                    ctx.fill();
+                }
+            }
+        }
+
         // Highlight target cell
         const [tc, tr] = pixelToGrid(drag.curX, drag.curY);
-        const canPlace = !isCellBlocked(tc, tr) && !isCellOccupied(tc, tr, drag.key);
+        const canPlace = canPlaceStation(drag.key, tc, tr);
         const tx = OFFICE.x + tc * GRID_CELL_W;
         const ty = OFFICE.y + tr * GRID_CELL_H;
-        ctx.fillStyle = canPlace ? 'rgba(74,140,92,0.3)' : 'rgba(212,72,59,0.3)';
+        ctx.fillStyle = canPlace ? 'rgba(74,140,92,0.4)' : 'rgba(212,72,59,0.4)';
         drawRoundRect(tx + 2, ty + 2, GRID_CELL_W - 4, GRID_CELL_H - 4, 6);
         ctx.fill();
 
@@ -970,11 +999,21 @@ function drawLayoutEditor() {
         ctx.globalAlpha = 1;
     }
 
-    // Hint
+    // Hint — show constraint when dragging, legend when not
     ctx.fillStyle = COL.textLight;
-    ctx.font = '11px sans-serif';
+    ctx.font = '12px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('\u{1F9F1} = pillar (blocked)  \u{1F6AA} = customer door  \u{1F6E4} = loading dock', cx, CANVAS_H - 90);
+    if (state.layoutDrag) {
+        const def = STATION_DEFS[state.layoutDrag.key];
+        ctx.fillStyle = COL.postal;
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(def.label + ': ' + def.constraint, cx, CANVAS_H - 95);
+        ctx.fillStyle = COL.textLight;
+        ctx.font = '11px sans-serif';
+        ctx.fillText('Green cells = valid placement', cx, CANVAS_H - 78);
+    } else {
+        ctx.fillText('\u{1F9F1} pillar   \u{1F6AA} customers enter   \u{1F69B} mail arrives/departs', cx, CANVAS_H - 88);
+    }
 
     // Done button
     ctx.fillStyle = COL.postal;
