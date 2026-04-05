@@ -422,6 +422,8 @@ function handleSortSwipe(endX, endY) {
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
         floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 95, COL.green, 22));
+        // Cancel any lingering shake from a previous miss
+        screenShake.amount = 0;
         // VFX: sparkles fly toward the target bin, not centre
         const targetBin = BIN_COLS[state.sortItem.bin];
         let px, py;
@@ -430,18 +432,18 @@ function handleSortSwipe(endX, endY) {
         else { px = CANVAS_W / 2; py = 185; }
         spawnParticles(px, py, targetBin.col, 6, 'sparkle');
         addBump(0, -1.5);
-        // Extra burst on streak milestones
+        // Extra burst on streak milestones — spawn at top, away from card
         if (state.streak >= 3 && state.streak % 3 === 0) {
-            spawnParticles(CANVAS_W / 2, CANVAS_H / 2 - 60, COL.streakGlow, 12, 'confetti');
-            addBump(0, -3);
+            spawnParticles(CANVAS_W / 2, 120, COL.streakGlow, 10, 'confetti');
+            addBump(0, -2);
         }
     } else {
         // Wrong sort — soft shake, not aggressive
         state.streak = 0;
         state.missortCount++;
         floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
-        addShake(2);
-        addBump(0, 1);
+        addShake(1.5);
+        addBump(0, 0.5);
     }
 
     // Next item or exit sort mode
@@ -529,17 +531,17 @@ let particles = [];
 function spawnParticles(x, y, col, count, style) {
     for (let i = 0; i < count; i++) {
         const angle = (Math.PI * 2 * i / count) + (Math.random() - 0.5) * 0.8;
-        const speed = 50 + Math.random() * 80;
+        const speed = 60 + Math.random() * 90;
         const sizeMap = { sparkle: 5 + Math.random() * 6, confetti: 6 + Math.random() * 6, rise: 4 + Math.random() * 5, burst: 5 + Math.random() * 7 };
-        const speedMap = { burst: 1.8, rise: 0.8, sparkle: 1.0, confetti: 1.4 };
+        const speedMap = { burst: 1.8, rise: 0.8, sparkle: 1.2, confetti: 1.6 };
         const st = style || 'burst';
         particles.push({
             x: x + (Math.random() - 0.5) * 20,
             y: y + (Math.random() - 0.5) * 20,
             vx: Math.cos(angle) * speed * (speedMap[st] || 1),
             vy: Math.sin(angle) * speed * (speedMap[st] || 1) - (st === 'rise' ? 60 : 0),
-            life: 0.8 + Math.random() * 0.6,
-            maxLife: 0.8 + Math.random() * 0.6,
+            life: 0.35 + Math.random() * 0.25,
+            maxLife: 0.35 + Math.random() * 0.25,
             size: sizeMap[st] || 5,
             col,
             style: st,
@@ -599,7 +601,7 @@ function drawParticles() {
 // ============================================================
 // SCREEN EFFECTS — shake + subtle sway/bump on events
 // ============================================================
-let screenShake = { amount: 0, decay: 0.8 };
+let screenShake = { amount: 0, decay: 0.7 };
 
 // Smooth bump — a soft push that eases back (not jarring like shake)
 let screenBump = { x: 0, y: 0 };
