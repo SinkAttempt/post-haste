@@ -1131,53 +1131,59 @@ function drawStation(key) {
     ctx.restore();
 }
 
+function drawDetailPill(x, y, w, h) {
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    drawRoundRect(x - w / 2, y - h / 2, w, h, h / 2);
+    ctx.fill();
+}
+
 function drawIncomingDetails(s) {
     const letters = state.incomingPile.filter(m => !m.isParcel).length;
     const parcels = state.incomingPile.filter(m => m.isParcel && !m.isFragile).length;
     const fragile = state.incomingPile.filter(m => m.isFragile).length;
     const cx = s.x + s.w / 2;
-    const y = s.y + s.h + 8;
+    const y = s.y + s.h + 14;
 
-    // Mini item icons in a row
-    ctx.font = '11px sans-serif';
+    // Build label parts
+    const parts = [];
+    if (letters > 0) parts.push('\u{2709}\uFE0F ' + letters);
+    if (parcels > 0) parts.push('\u{1F4E6} ' + parcels);
+    if (fragile > 0) parts.push('\u{26A0}\uFE0F ' + fragile);
+    const label = parts.join('  ');
+
+    // Dark pill background
+    const pillW = Math.max(parts.length * 36, 50);
+    drawDetailPill(cx, y, pillW, 22);
+
+    ctx.font = 'bold 13px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-
-    let ox = cx - 25;
-    if (letters > 0) {
-        ctx.fillStyle = COL.text;
-        ctx.fillText('\u{2709}' + letters, ox, y);
-        ox += 25;
-    }
-    if (parcels > 0) {
-        ctx.fillStyle = COL.brown;
-        ctx.fillText('\u{1F4E6}' + parcels, ox, y);
-        ox += 25;
-    }
-    if (fragile > 0) {
-        ctx.fillStyle = COL.red;
-        ctx.fillText('\u{26A0}' + fragile, ox, y);
-    }
+    ctx.fillStyle = COL.white;
+    ctx.fillText(label, cx, y);
 }
 
 function drawCustomerDetails(s) {
     const cx = s.x + s.w / 2;
-    const startY = s.y + s.h + 6;
+    const y = s.y + s.h + 14;
+
+    // Dark pill background
+    const pillW = Math.max(state.customers.length * 24 + 8, 36);
+    drawDetailPill(cx, y, pillW, 26);
 
     // Show each customer as a face emoji that changes with patience
+    const startX = cx - (state.customers.length - 1) * 12;
     state.customers.forEach((cust, i) => {
         const patiencePct = cust.patience / (state.currentPatience || CUSTOMER_PATIENCE);
         let face;
-        if (patiencePct > 0.6) face = '\u{1F642}';       // slightly smiling
-        else if (patiencePct > 0.3) face = '\u{1F610}';   // neutral
-        else if (patiencePct > 0.15) face = '\u{1F620}';  // angry
-        else face = '\u{1F621}';                            // rage
+        if (patiencePct > 0.6) face = '\u{1F642}';
+        else if (patiencePct > 0.3) face = '\u{1F610}';
+        else if (patiencePct > 0.15) face = '\u{1F620}';
+        else face = '\u{1F621}';
 
-        const x = cx - 12 + i * 16;
-        ctx.font = '14px sans-serif';
+        ctx.font = '18px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(face, x, startY + 4);
+        ctx.fillText(face, startX + i * 24, y);
     });
 }
 
@@ -1185,22 +1191,21 @@ function drawOutgoingDetails(s) {
     const letters = state.outgoingPile.filter(m => !m.isParcel).length;
     const parcels = state.outgoingPile.filter(m => m.isParcel).length;
     const cx = s.x + s.w / 2;
-    const y = s.y - 14;
+    const y = s.y - 16;
 
-    ctx.font = '11px sans-serif';
+    const parts = [];
+    if (letters > 0) parts.push('\u{2709}\uFE0F ' + letters);
+    if (parcels > 0) parts.push('\u{1F4E6} ' + parcels);
+    const label = parts.join('  ');
+
+    const pillW = Math.max(parts.length * 36, 50);
+    drawDetailPill(cx, y, pillW, 22);
+
+    ctx.font = 'bold 13px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-
-    let ox = cx - 15;
-    if (letters > 0) {
-        ctx.fillStyle = COL.white;
-        ctx.fillText('\u{2709}' + letters, ox, y);
-        ox += 25;
-    }
-    if (parcels > 0) {
-        ctx.fillStyle = COL.white;
-        ctx.fillText('\u{1F4E6}' + parcels, ox, y);
-    }
+    ctx.fillStyle = COL.white;
+    ctx.fillText(label, cx, y);
 }
 
 function getPlayerMood() {
