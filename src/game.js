@@ -72,6 +72,157 @@ const CUSTOMER_SPAWN_INTERVAL_BASE = 5000; // ms between customers
 const CUSTOMER_PATIENCE = 12000; // ms before customer leaves
 
 // ============================================================
+// AUDIO — cozy synthesised SFX (no external files)
+// ============================================================
+let audioCtx = null;
+let masterGain = null;
+
+function getAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 0.5;
+        masterGain.connect(audioCtx.destination);
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+}
+
+function unlockAudio() {
+    const ctx = getAudio();
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+}
+
+// Soft bubble pop — picking up mail
+function sfxPickup() {
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(500, t);
+    osc.frequency.exponentialRampToValueAtTime(200, t + 0.08);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t);
+    osc.stop(t + 0.12);
+}
+
+// Swoosh + ding — correct sort
+function sfxCorrect() {
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    // Ding
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, t);
+    osc.frequency.setValueAtTime(1047, t + 0.06);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.12, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t);
+    osc.stop(t + 0.3);
+    // Warm undertone
+    const osc2 = ctx.createOscillator();
+    const gain2 = ctx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(523, t);
+    gain2.gain.setValueAtTime(0, t);
+    gain2.gain.linearRampToValueAtTime(0.06, t + 0.02);
+    gain2.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    osc2.connect(gain2);
+    gain2.connect(masterGain);
+    osc2.start(t);
+    osc2.stop(t + 0.25);
+}
+
+// Gentle boop — wrong sort
+function sfxWrong() {
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, t);
+    osc.frequency.exponentialRampToValueAtTime(200, t + 0.15);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.1, t + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t);
+    osc.stop(t + 0.2);
+}
+
+// Warm ka-ching — tips/coins
+function sfxCoin() {
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(1319, t);
+    osc.frequency.setValueAtTime(1568, t + 0.05);
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.1, t + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start(t);
+    osc.stop(t + 0.25);
+}
+
+// Soft whoosh — dispatching mail
+function sfxDispatch() {
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    // Noise-like whoosh using detuned oscillators
+    for (let i = 0; i < 3; i++) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(200 + i * 150, t);
+        osc.frequency.exponentialRampToValueAtTime(800 + i * 200, t + 0.15);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.04, t + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+        osc.connect(gain);
+        gain.connect(masterGain);
+        osc.start(t);
+        osc.stop(t + 0.2);
+    }
+}
+
+// Rising chime — streak milestone
+function sfxStreak() {
+    const ctx = getAudio();
+    const t = ctx.currentTime;
+    const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t + i * 0.08);
+        gain.gain.setValueAtTime(0, t + i * 0.08);
+        gain.gain.linearRampToValueAtTime(0.1, t + i * 0.08 + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + i * 0.08 + 0.3);
+        osc.connect(gain);
+        gain.connect(masterGain);
+        osc.start(t + i * 0.08);
+        osc.stop(t + i * 0.08 + 0.3);
+    });
+}
+
+// ============================================================
 // GAME STATE
 // ============================================================
 let canvas, ctx;
@@ -293,6 +444,7 @@ function onMouseUp(e) {
 }
 
 function handlePointerDown(x, y, id) {
+    unlockAudio();
     if (state.screen === 'menu') {
         // Check reset button
         if (state.daysCompleted > 0 && state._resetBtnY && y > state._resetBtnY && y < state._resetBtnY + 35 && x > 130 && x < 260) {
@@ -424,6 +576,7 @@ function handleSortSwipe(endX, endY) {
         floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 95, COL.green, 22));
         // Cancel any lingering shake from a previous miss
         screenShake.amount = 0;
+        sfxCorrect();
         // VFX: sparkles fly toward the target bin, not centre
         const targetBin = BIN_COLS[state.sortItem.bin];
         let px, py;
@@ -436,6 +589,7 @@ function handleSortSwipe(endX, endY) {
         if (state.streak >= 3 && state.streak % 3 === 0) {
             spawnParticles(CANVAS_W / 2, 120, COL.streakGlow, 10, 'confetti');
             addBump(0, -2);
+            sfxStreak();
         }
     } else {
         // Wrong sort — soft shake, not aggressive
@@ -444,6 +598,7 @@ function handleSortSwipe(endX, endY) {
         floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
         addShake(1.5);
         addBump(0, 0.5);
+        sfxWrong();
     }
 
     // Next item or exit sort mode
@@ -790,6 +945,7 @@ function update(dt) {
             const sc = stationCenter(STATIONS.incoming);
             spawnParticles(sc.x, sc.y, COL.brown, 8, 'rise');
             addBump(0, -1.5);
+            sfxPickup();
         }
     }
 
@@ -811,6 +967,7 @@ function update(dt) {
         const cc = stationCenter(STATIONS.counter);
         spawnParticles(cc.x, cc.y, COL.yellow, 8, 'sparkle');
         addBump(0, -2);
+        sfxCoin();
     }
 
     // OUTGOING: Deposit sorted mail
@@ -819,10 +976,11 @@ function update(dt) {
         state.mailDelivered += delivered;
         const bonus = Math.floor(delivered * 1.5);
         state.dayCoins += bonus;
-        floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.postal, 18));
+        floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.red, 18));
         const oc = stationCenter(STATIONS.outgoing);
         spawnParticles(oc.x, oc.y, COL.postal, 10, 'burst');
         addBump(0, -3);
+        sfxDispatch();
         state.outgoingPile = [];
     }
 
@@ -892,6 +1050,19 @@ function drawStation(key) {
     ctx.restore();
 }
 
+function getPlayerMood() {
+    // Excited: on a streak of 3+
+    if (state.streak >= 3) return 'excited';
+    // Sad: just missorted (shake still active)
+    if (screenShake.amount > 0.5) return 'sad';
+    // Happy: carrying mail or just sorted something
+    if (state.stack.length > 0 || state.sortedCount > 0) return 'happy';
+    // Happy: customers waiting and near counter
+    if (state.customers.length > 0 && nearStation('counter')) return 'happy';
+    // Neutral: idle
+    return 'neutral';
+}
+
 function drawPlayer() {
     const px = state.player.x;
     const py = state.player.y;
@@ -909,18 +1080,66 @@ function drawPlayer() {
     drawRoundRect(px - PLAYER_RADIUS, py - PLAYER_RADIUS, PLAYER_RADIUS * 2, PLAYER_RADIUS * 2, 8);
     ctx.fill();
 
-    // Face
+    // Face — expression changes with game state
+    const mood = getPlayerMood();
+
+    // Eyes
     ctx.fillStyle = COL.white;
     ctx.beginPath();
-    ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
-    ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
+    if (mood === 'sad') {
+        // Droopy eyes (smaller, lower)
+        ctx.arc(px - 5, py - 3, 2.5, 0, Math.PI * 2);
+        ctx.arc(px + 5, py - 3, 2.5, 0, Math.PI * 2);
+    } else if (mood === 'happy') {
+        // Big bright eyes
+        ctx.arc(px - 5, py - 4, 3.5, 0, Math.PI * 2);
+        ctx.arc(px + 5, py - 4, 3.5, 0, Math.PI * 2);
+    } else if (mood === 'excited') {
+        // Squinting happy (closed smile eyes)
+        ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
+        ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
+    } else {
+        // Neutral
+        ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
+        ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
+    }
     ctx.fill();
+
+    // Pupils for excited (tiny dots on white)
+    if (mood === 'excited') {
+        ctx.fillStyle = COL.postal;
+        ctx.beginPath();
+        ctx.arc(px - 5, py - 4, 1.2, 0, Math.PI * 2);
+        ctx.arc(px + 5, py - 4, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+    }
 
     // Mouth
     ctx.strokeStyle = COL.white;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(px, py + 2, 5, 0.1 * Math.PI, 0.9 * Math.PI);
+    if (mood === 'sad') {
+        // Frown
+        ctx.arc(px, py + 6, 4, 1.1 * Math.PI, 1.9 * Math.PI);
+    } else if (mood === 'happy') {
+        // Smile
+        ctx.arc(px, py + 1, 5, 0.1 * Math.PI, 0.9 * Math.PI);
+    } else if (mood === 'excited') {
+        // Big open smile
+        ctx.arc(px, py + 1, 6, 0.05 * Math.PI, 0.95 * Math.PI);
+        ctx.stroke();
+        // Fill mouth
+        ctx.fillStyle = '#1a3050';
+        ctx.beginPath();
+        ctx.arc(px, py + 1, 6, 0.05 * Math.PI, 0.95 * Math.PI);
+        ctx.closePath();
+        ctx.fill();
+        ctx.beginPath(); // reset for outer stroke
+    } else {
+        // Neutral line
+        ctx.moveTo(px - 4, py + 3);
+        ctx.lineTo(px + 4, py + 3);
+    }
     ctx.stroke();
 
     // Hat (postal cap)
