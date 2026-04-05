@@ -422,21 +422,26 @@ function handleSortSwipe(endX, endY) {
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
         floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 95, COL.green, 22));
-        // VFX: sparkles on correct sort + soft bump
-        spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.green, 10, 'sparkle');
-        addBump(0, -2); // subtle upward nudge
+        // VFX: sparkles fly toward the target bin, not centre
+        const targetBin = BIN_COLS[state.sortItem.bin];
+        let px, py;
+        if (targetBin.dir === 'left') { px = 50; py = CANVAS_H / 2 - 20; }
+        else if (targetBin.dir === 'right') { px = CANVAS_W - 50; py = CANVAS_H / 2 - 20; }
+        else { px = CANVAS_W / 2; py = 185; }
+        spawnParticles(px, py, targetBin.col, 6, 'sparkle');
+        addBump(0, -1.5);
         // Extra burst on streak milestones
         if (state.streak >= 3 && state.streak % 3 === 0) {
-            spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.streakGlow, 16, 'confetti');
-            addBump(0, -4);
+            spawnParticles(CANVAS_W / 2, CANVAS_H / 2 - 60, COL.streakGlow, 12, 'confetti');
+            addBump(0, -3);
         }
     } else {
-        // Wrong sort — bounces back
+        // Wrong sort — soft shake, not aggressive
         state.streak = 0;
         state.missortCount++;
         floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
-        addShake(5);
-        addBump((Math.random() - 0.5) * 4, 2);
+        addShake(2);
+        addBump(0, 1);
     }
 
     // Next item or exit sort mode
@@ -594,7 +599,7 @@ function drawParticles() {
 // ============================================================
 // SCREEN EFFECTS — shake + subtle sway/bump on events
 // ============================================================
-let screenShake = { amount: 0, decay: 0.88 };
+let screenShake = { amount: 0, decay: 0.8 };
 
 // Smooth bump — a soft push that eases back (not jarring like shake)
 let screenBump = { x: 0, y: 0 };
