@@ -408,12 +408,12 @@ function handleSortSwipe(endX, endY) {
         state.dayCoins += earned;
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
-        floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 50, COL.green));
+        floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H - 180, COL.green, 22));
     } else {
         // Wrong sort — bounces back
         state.streak = 0;
         state.missortCount++;
-        floatingTexts.push(createFloatingText('WRONG', CANVAS_W / 2, CANVAS_H / 2 - 50, COL.red));
+        floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H - 180, COL.red, 22));
     }
 
     // Next item or exit sort mode
@@ -481,14 +481,14 @@ function handleUpgradeTap(x, y) {
 // ============================================================
 let floatingTexts = [];
 
-function createFloatingText(text, x, y, col) {
-    return { text, x, y, col, life: 1.0 };
+function createFloatingText(text, x, y, col, size) {
+    return { text, x, y, col, life: 1.0, size: size || 16 };
 }
 
 function updateFloatingTexts(dt) {
     for (let i = floatingTexts.length - 1; i >= 0; i--) {
-        floatingTexts[i].life -= dt * 1.5;
-        floatingTexts[i].y -= 30 * dt;
+        floatingTexts[i].life -= dt * 1.2;
+        floatingTexts[i].y -= 40 * dt;
         if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
     }
 }
@@ -644,7 +644,7 @@ function update(dt) {
         const cust = state.customers.shift();
         state.customersServed++;
         state.dayCoins += cust.coins;
-        floatingTexts.push(createFloatingText('+' + cust.coins, STATIONS.counter.x + 35, STATIONS.counter.y - 10, COL.green));
+        floatingTexts.push(createFloatingText('+' + cust.coins + ' tip', STATIONS.counter.x + STATIONS.counter.w / 2, STATIONS.counter.y - 30, COL.green, 18));
     }
 
     // OUTGOING: Deposit sorted mail
@@ -653,7 +653,7 @@ function update(dt) {
         state.mailDelivered += delivered;
         const bonus = delivered * 2;
         state.dayCoins += bonus;
-        floatingTexts.push(createFloatingText('+' + bonus + ' delivery', STATIONS.outgoing.x + 35, STATIONS.outgoing.y - 10, COL.postal));
+        floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.postal, 18));
         state.outgoingPile = [];
     }
 
@@ -1012,12 +1012,22 @@ function drawProximityGlow(s, actionText) {
 function drawFloatingTexts() {
     for (const ft of floatingTexts) {
         ctx.save();
-        ctx.globalAlpha = ft.life;
-        ctx.fillStyle = ft.col;
-        ctx.font = 'bold 16px sans-serif';
+        ctx.globalAlpha = Math.min(ft.life * 1.5, 1);
+        ctx.font = 'bold ' + ft.size + 'px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(ft.text, ft.x, ft.y);
+
+        // Background pill for readability
+        const metrics = ctx.measureText(ft.text);
+        const pw = metrics.width + 16;
+        const ph = ft.size + 8;
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        drawRoundRect(ft.x - pw / 2, ft.y - ph / 2, pw, ph, ph / 2);
+        ctx.fill();
+
+        // Text
+        ctx.fillStyle = ft.col;
+        ctx.fillText(ft.text, ft.x, ft.y + 1);
         ctx.restore();
     }
 }
