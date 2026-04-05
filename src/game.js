@@ -422,11 +422,18 @@ function handleSortSwipe(endX, endY) {
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
         floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 95, COL.green, 22));
+        // VFX: soft sparkles on correct sort
+        spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.green, 6, 'sparkle');
+        // Extra sparkle on streak milestones
+        if (state.streak >= 5 && state.streak % 5 === 0) {
+            spawnParticles(CANVAS_W / 2, CANVAS_H / 2, COL.streakGlow, 10, 'confetti');
+        }
     } else {
         // Wrong sort — bounces back
         state.streak = 0;
         state.missortCount++;
         floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
+        addShake(3);
     }
 
     // Next item or exit sort mode
@@ -446,17 +453,17 @@ const UPGRADE_DEFS = [
         key: 'capacity',
         label: 'Carry Capacity',
         desc: '+1 mail per trip',
-        baseCost: 30,
-        costMult: 1.8,
+        baseCost: 50,
+        costMult: 2.2,
         apply: () => { state.maxStack = 3 + state.upgrades.capacity + 1; },
     },
     {
         key: 'speed',
         label: 'Move Speed',
-        desc: 'Walk faster',
-        baseCost: 25,
-        costMult: 1.6,
-        apply: () => { state.moveSpeed = PLAYER_SPEED_BASE + (state.upgrades.speed + 1) * 0.3; },
+        desc: 'Walk a bit faster',
+        baseCost: 40,
+        costMult: 2.0,
+        apply: () => { state.moveSpeed = PLAYER_SPEED_BASE + (state.upgrades.speed + 1) * 0.2; },
     },
 ];
 
@@ -504,6 +511,86 @@ function updateFloatingTexts(dt) {
         floatingTexts[i].y -= 40 * dt;
         if (floatingTexts[i].life <= 0) floatingTexts.splice(i, 1);
     }
+}
+
+// ============================================================
+// PARTICLES — soft, cozy visual feedback
+// ============================================================
+let particles = [];
+
+function spawnParticles(x, y, col, count, style) {
+    for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i / count) + (Math.random() - 0.5) * 0.5;
+        const speed = 20 + Math.random() * 40;
+        particles.push({
+            x, y,
+            vx: Math.cos(angle) * speed * (style === 'burst' ? 1.5 : 0.6),
+            vy: Math.sin(angle) * speed * (style === 'burst' ? 1.5 : 0.6) - (style === 'rise' ? 30 : 0),
+            life: 0.6 + Math.random() * 0.5,
+            maxLife: 0.6 + Math.random() * 0.5,
+            size: style === 'sparkle' ? 2 + Math.random() * 3 : 3 + Math.random() * 4,
+            col,
+            style: style || 'burst',
+        });
+    }
+}
+
+function updateParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 15 * dt; // gentle gravity
+        p.life -= dt;
+        if (p.life <= 0) particles.splice(i, 1);
+    }
+}
+
+function drawParticles() {
+    for (const p of particles) {
+        ctx.save();
+        const t = p.life / p.maxLife;
+        ctx.globalAlpha = t * 0.7;
+
+        if (p.style === 'sparkle') {
+            // Soft diamond sparkle
+            const s = p.size * t;
+            ctx.fillStyle = p.col;
+            ctx.translate(p.x, p.y);
+            ctx.rotate(Date.now() * 0.003 + p.maxLife);
+            ctx.fillRect(-s / 2, -s / 2, s, s);
+        } else if (p.style === 'confetti') {
+            // Soft rounded confetti
+            ctx.fillStyle = p.col;
+            const s = p.size * (0.5 + t * 0.5);
+            drawRoundRect(p.x - s / 2, p.y - s / 2, s, s * 0.6, 2);
+            ctx.fill();
+        } else {
+            // Soft circle (burst/rise)
+            ctx.fillStyle = p.col;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.size * t, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+}
+
+// ============================================================
+// SCREEN SHAKE — gentle wobble for impacts
+// ============================================================
+let screenShake = { amount: 0, decay: 0.9 };
+
+function addShake(amount) {
+    screenShake.amount = Math.min(screenShake.amount + amount, 6);
+}
+
+function getShakeOffset() {
+    if (screenShake.amount < 0.5) return { x: 0, y: 0 };
+    return {
+        x: (Math.random() - 0.5) * screenShake.amount * 2,
+        y: (Math.random() - 0.5) * screenShake.amount * 2,
+    };
 }
 
 // ============================================================
@@ -640,8 +727,13 @@ function update(dt) {
 
     // INCOMING: Pick up mail
     if (nearStation('incoming') && state.incomingPile.length > 0) {
+        const hadItems = state.stack.length;
         while (state.stack.length < state.maxStack && state.incomingPile.length > 0) {
             state.stack.push(state.incomingPile.shift());
+        }
+        if (state.stack.length > hadItems) {
+            const sc = stationCenter(STATIONS.incoming);
+            spawnParticles(sc.x, sc.y, COL.brown, 4, 'rise');
         }
     }
 
@@ -660,6 +752,8 @@ function update(dt) {
         state.customersServed++;
         state.dayCoins += cust.coins;
         floatingTexts.push(createFloatingText('+' + cust.coins + ' tip', STATIONS.counter.x + STATIONS.counter.w / 2, STATIONS.counter.y - 30, COL.green, 18));
+        const cc = stationCenter(STATIONS.counter);
+        spawnParticles(cc.x, cc.y, COL.yellow, 5, 'sparkle');
     }
 
     // OUTGOING: Deposit sorted mail
@@ -669,10 +763,14 @@ function update(dt) {
         const bonus = Math.floor(delivered * 1.5);
         state.dayCoins += bonus;
         floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.postal, 18));
+        const oc = stationCenter(STATIONS.outgoing);
+        spawnParticles(oc.x, oc.y, COL.postal, 6, 'burst');
         state.outgoingPile = [];
     }
 
     updateFloatingTexts(dt);
+    updateParticles(dt);
+    screenShake.amount *= screenShake.decay;
 }
 
 // ============================================================
@@ -1596,6 +1694,13 @@ function gameLoop(timestamp) {
 function render() {
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
+    // Apply screen shake
+    const shake = getShakeOffset();
+    if (shake.x || shake.y) {
+        ctx.save();
+        ctx.translate(shake.x, shake.y);
+    }
+
     switch (state.screen) {
         case 'menu':
             drawMenu();
@@ -1604,6 +1709,7 @@ function render() {
             ctx.fillStyle = COL.bg;
             ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
             drawOffice();
+            drawParticles();
             drawPlayer();
             drawJoystick();
             drawHUD();
@@ -1616,6 +1722,7 @@ function render() {
             drawPlayer();
             drawHUD();
             drawSortMode();
+            drawParticles();
             break;
         case 'dayEnd':
             drawDayEnd();
@@ -1623,6 +1730,11 @@ function render() {
         case 'upgrade':
             drawUpgradeScreen();
             break;
+    }
+
+    // End screen shake transform
+    if (shake.x || shake.y) {
+        ctx.restore();
     }
 }
 
