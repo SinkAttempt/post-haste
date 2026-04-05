@@ -76,30 +76,55 @@ const CUSTOMER_PATIENCE = 12000; // ms before customer leaves
 // ============================================================
 let audioCtx = null;
 let masterGain = null;
+let audioReady = false;
 
 function getAudio() {
-    if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        masterGain = audioCtx.createGain();
-        masterGain.gain.value = 0.5;
-        masterGain.connect(audioCtx.destination);
+    try {
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            masterGain = audioCtx.createGain();
+            masterGain.gain.value = 0.5;
+            masterGain.connect(audioCtx.destination);
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().then(() => { audioReady = true; });
+        } else {
+            audioReady = true;
+        }
+        return audioCtx;
+    } catch (e) {
+        console.error('Audio init failed:', e);
+        return null;
     }
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    return audioCtx;
 }
 
 function unlockAudio() {
     const ctx = getAudio();
-    const buf = ctx.createBuffer(1, 1, 22050);
-    const src = ctx.createBufferSource();
-    src.buffer = buf;
-    src.connect(ctx.destination);
-    src.start(0);
+    if (!ctx) return;
+    try {
+        // Force resume then play silent buffer
+        const doUnlock = () => {
+            const buf = ctx.createBuffer(1, 1, 22050);
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.connect(ctx.destination);
+            src.start(0);
+            audioReady = true;
+        };
+        if (ctx.state === 'suspended') {
+            ctx.resume().then(doUnlock);
+        } else {
+            doUnlock();
+        }
+    } catch (e) {
+        console.error('Audio unlock failed:', e);
+    }
 }
 
 // Soft bubble pop — picking up mail
 function sfxPickup() {
     const ctx = getAudio();
+    if (!ctx || ctx.state !== 'running') return;
     const t = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -117,6 +142,7 @@ function sfxPickup() {
 // Swoosh + ding — correct sort
 function sfxCorrect() {
     const ctx = getAudio();
+    if (!ctx || ctx.state !== 'running') return;
     const t = ctx.currentTime;
     // Ding
     const osc = ctx.createOscillator();
@@ -148,6 +174,7 @@ function sfxCorrect() {
 // Gentle boop — wrong sort
 function sfxWrong() {
     const ctx = getAudio();
+    if (!ctx || ctx.state !== 'running') return;
     const t = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -166,6 +193,7 @@ function sfxWrong() {
 // Warm ka-ching — tips/coins
 function sfxCoin() {
     const ctx = getAudio();
+    if (!ctx || ctx.state !== 'running') return;
     const t = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -184,6 +212,7 @@ function sfxCoin() {
 // Soft whoosh — dispatching mail
 function sfxDispatch() {
     const ctx = getAudio();
+    if (!ctx || ctx.state !== 'running') return;
     const t = ctx.currentTime;
     // Noise-like whoosh using detuned oscillators
     for (let i = 0; i < 3; i++) {
@@ -205,6 +234,7 @@ function sfxDispatch() {
 // Rising chime — streak milestone
 function sfxStreak() {
     const ctx = getAudio();
+    if (!ctx || ctx.state !== 'running') return;
     const t = ctx.currentTime;
     const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6
     notes.forEach((freq, i) => {
