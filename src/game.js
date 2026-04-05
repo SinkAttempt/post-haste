@@ -722,6 +722,11 @@ let lastTime = 0;
 let dayTimerAcc = 0;
 
 function update(dt) {
+    // VFX always update regardless of screen
+    updateFloatingTexts(dt);
+    updateParticles(dt);
+    updateScreenEffects();
+
     if (state.screen !== 'playing') return;
 
     const now = Date.now();
@@ -821,9 +826,6 @@ function update(dt) {
         state.outgoingPile = [];
     }
 
-    updateFloatingTexts(dt);
-    updateParticles(dt);
-    updateScreenEffects();
 }
 
 // ============================================================
