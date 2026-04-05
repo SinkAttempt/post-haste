@@ -26,6 +26,11 @@
 </head>
 <body>
     <canvas id="game-canvas"></canvas>
-    <script src="../src/game.js"></script>
+    <script>
+        // Cache-bust: append build timestamp to script URL
+        const s = document.createElement('script');
+        s.src = '../src/game.js?v=' + Date.now();
+        document.body.appendChild(s);
+    </script>
 </body>
 </html>
