@@ -1172,83 +1172,145 @@ function drawMenu() {
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
     const cx = CANVAS_W / 2;
+    let y = 45;
 
     // Title
     ctx.fillStyle = COL.postal;
-    ctx.font = 'bold 52px sans-serif';
+    ctx.font = 'bold 40px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('POST', cx, 180);
-    ctx.fillText('HASTE', cx, 240);
+    ctx.fillText('POST HASTE', cx, y);
+    y += 28;
 
     // Subtitle
     ctx.fillStyle = COL.brown;
-    ctx.font = '16px sans-serif';
-    ctx.fillText('Sort. Serve. Deliver.', cx, 285);
+    ctx.font = '14px sans-serif';
+    ctx.fillText('Sort. Serve. Deliver.', cx, y);
+    y += 20;
 
     // Stats (returning player)
     if (state.daysCompleted > 0) {
         ctx.fillStyle = COL.textLight;
-        ctx.font = '14px sans-serif';
-        ctx.fillText('Day ' + state.day + '  \u{2022}  \u{1F4B0} ' + state.totalCoins + '  \u{2022}  \u{2B50} ' + state.totalStars, cx, 330);
+        ctx.font = '13px sans-serif';
+        ctx.fillText('Day ' + state.day + '  \u{2022}  \u{1F4B0} ' + state.totalCoins + '  \u{2022}  \u{2B50} ' + state.totalStars, cx, y);
+        y += 15;
     }
 
-    // How to play section
-    const howY = state.daysCompleted > 0 ? 380 : 350;
+    // === HOW TO PLAY ===
+    y += 12;
     ctx.fillStyle = COL.postal;
-    ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('HOW TO PLAY', cx, howY);
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('HOW TO PLAY', cx, y);
+    y += 8;
+
+    // Divider
+    ctx.strokeStyle = COL.wall;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(60, y); ctx.lineTo(CANVAS_W - 60, y);
+    ctx.stroke();
+    y += 14;
 
     const steps = [
         ['\u{1F4E8}', 'Collect', 'Walk to MAIL IN to pick up mail'],
-        ['\u{1F4CB}', 'Sort', 'Walk to SORT desk, swipe to correct bin'],
-        ['\u{1F69A}', 'Deliver', 'Walk to SEND OUT to dispatch'],
-        ['\u{1F6CE}', 'Serve', 'Walk to SERVE counter for tips'],
+        ['\u{1F4CB}', 'Sort', 'Walk to SORT desk, swipe to matching colour bin'],
+        ['\u{1F69A}', 'Deliver', 'Walk to SEND OUT to dispatch sorted mail'],
+        ['\u{1F6CE}', 'Serve', 'Walk to SERVE counter to earn tips'],
     ];
 
-    steps.forEach((step, i) => {
-        const sy = howY + 30 + i * 42;
-
-        // Icon
-        ctx.font = '20px sans-serif';
+    steps.forEach((step) => {
+        ctx.font = '18px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText(step[0], 55, sy + 2);
+        ctx.fillText(step[0], 48, y + 2);
 
-        // Bold action
         ctx.fillStyle = COL.text;
-        ctx.font = 'bold 14px sans-serif';
+        ctx.font = 'bold 13px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText(step[1], 80, sy - 6);
+        ctx.fillText(step[1], 72, y - 4);
 
-        // Description
         ctx.fillStyle = COL.textLight;
-        ctx.font = '12px sans-serif';
-        ctx.fillText(step[2], 80, sy + 12);
+        ctx.font = '11px sans-serif';
+        ctx.fillText(step[2], 72, y + 10);
 
         ctx.fillStyle = COL.postal;
+        y += 35;
     });
 
-    // Control hint
-    const ctrlY = howY + 210;
+    // Controls
     ctx.fillStyle = COL.textLight;
-    ctx.font = '12px sans-serif';
+    ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('\u{1F44D} Touch & drag bottom of screen to move', cx, ctrlY);
+    ctx.fillText('Touch & drag bottom of screen to move your character', cx, y);
+    y += 14;
+    ctx.fillText('Walk near a station to interact automatically', cx, y);
+    y += 14;
+    ctx.fillText('At the sort desk: stop moving, then swipe mail to bins', cx, y);
+
+    // === TESTER INFO ===
+    y += 28;
+    ctx.fillStyle = COL.postal;
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText('TESTER INFO', cx, y);
+    y += 8;
+
+    ctx.strokeStyle = COL.wall;
+    ctx.beginPath();
+    ctx.moveTo(60, y); ctx.lineTo(CANVAS_W - 60, y);
+    ctx.stroke();
+    y += 14;
+
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '11px sans-serif';
+
+    const testerLines = [
+        ['\u{23E9}', 'SKIP button (top-right during play) skips to end of day'],
+        ['\u{1F4E6}', 'Day 5+: parcels appear (heavier, take more bag space)'],
+        ['\u{1F7E2}', 'Day 10+: 3rd sorting bin unlocks (green)'],
+        ['\u{1F4B0}', 'Between days: upgrade carry capacity and move speed'],
+        ['\u{1F525}', 'Correct sort streaks give coin multipliers (up to 3x)'],
+    ];
+
+    testerLines.forEach((line) => {
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(line[0], 42, y + 1);
+
+        ctx.fillStyle = COL.text;
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(line[1], 60, y + 1);
+
+        ctx.fillStyle = COL.textLight;
+        y += 22;
+    });
+
+    // What we want feedback on
+    y += 6;
+    ctx.fillStyle = COL.brown;
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('We want to know:', cx, y);
+    y += 16;
+    ctx.fillStyle = COL.textLight;
+    ctx.font = '11px sans-serif';
+    ctx.fillText('Does sorting feel satisfying? Is movement clear?', cx, y);
+    y += 15;
+    ctx.fillText('Does the pace feel right? What would you upgrade first?', cx, y);
 
     // Start button
-    const btnY = ctrlY + 40;
+    y += 32;
     ctx.fillStyle = COL.postal;
-    drawRoundRect(100, btnY, 190, 55, 14);
+    drawRoundRect(100, y, 190, 50, 14);
     ctx.fill();
     ctx.fillStyle = COL.white;
-    ctx.font = 'bold 20px sans-serif';
+    ctx.font = 'bold 18px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(state.daysCompleted > 0 ? '\u{1F4EC} Next Shift' : '\u{1F4EC} Start Shift', cx, btnY + 28);
+    ctx.fillText(state.daysCompleted > 0 ? '\u{1F4EC} Next Shift' : '\u{1F4EC} Start Shift', cx, y + 26);
 
     // DuckDuckWeasel
     ctx.font = '11px sans-serif';
     ctx.fillStyle = COL.textLight;
-    ctx.fillText('DuckDuckWeasel', cx, CANVAS_H - 30);
+    ctx.fillText('DuckDuckWeasel', cx, CANVAS_H - 20);
 
     ctx.restore();
 }
