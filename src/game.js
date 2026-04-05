@@ -66,10 +66,10 @@ const JOY_DEAD = 8;
 const PROX_DIST = 45;
 
 // Day settings
-const DAY_BASE_TIME = 180; // 3 minutes in seconds
-const MAIL_SPAWN_INTERVAL_BASE = 3000; // ms between new mail at incoming
-const CUSTOMER_SPAWN_INTERVAL_BASE = 8000; // ms between customers
-const CUSTOMER_PATIENCE = 15000; // ms before customer leaves
+const DAY_BASE_TIME = 90; // 90 seconds — short, punchy shifts
+const MAIL_SPAWN_INTERVAL_BASE = 2000; // ms between new mail at incoming
+const CUSTOMER_SPAWN_INTERVAL_BASE = 5000; // ms between customers
+const CUSTOMER_PATIENCE = 12000; // ms before customer leaves
 
 // ============================================================
 // GAME STATE
@@ -521,8 +521,9 @@ function startDay() {
     // Scale difficulty by day
     state.sortBinCount = state.day >= 10 ? 3 : 2;
 
-    // Seed some initial mail
-    for (let i = 0; i < 3; i++) {
+    // Seed initial mail — start busy, scale with day
+    const seedCount = Math.min(3 + Math.floor(state.day / 3), 8);
+    for (let i = 0; i < seedCount; i++) {
         state.incomingPile.push(createMail());
     }
 }
@@ -530,10 +531,10 @@ function startDay() {
 function endDay() {
     state.screen = 'dayEnd';
 
-    // Calculate stars
+    // Calculate stars (tuned for 90s days)
     let stars = 1;
-    if (state.sortedCount >= 10 && state.missortCount <= 2) stars = 2;
-    if (state.sortedCount >= 20 && state.missortCount === 0) stars = 3;
+    if (state.sortedCount >= 6 && state.missortCount <= 2) stars = 2;
+    if (state.sortedCount >= 12 && state.missortCount === 0) stars = 3;
 
     state.dayStars = stars;
     state.totalStars += stars;
@@ -586,14 +587,14 @@ function update(dt) {
     }
 
     // Spawn mail at incoming
-    const mailInterval = Math.max(1500, MAIL_SPAWN_INTERVAL_BASE - state.day * 100);
-    if (now - state.lastMailSpawn > mailInterval && state.incomingPile.length < 8) {
+    const mailInterval = Math.max(800, MAIL_SPAWN_INTERVAL_BASE - state.day * 150);
+    if (now - state.lastMailSpawn > mailInterval && state.incomingPile.length < 10) {
         state.incomingPile.push(createMail());
         state.lastMailSpawn = now;
     }
 
     // Spawn customers
-    const custInterval = Math.max(4000, CUSTOMER_SPAWN_INTERVAL_BASE - state.day * 300);
+    const custInterval = Math.max(2500, CUSTOMER_SPAWN_INTERVAL_BASE - state.day * 300);
     if (now - state.lastCustomerSpawn > custInterval && state.customers.length < 3) {
         state.customers.push({
             id: Date.now(),
