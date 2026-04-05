@@ -2772,6 +2772,17 @@ function initBot() {
         dayLog: [],             // current profile's day data
         allProfiles: profileName === 'all' ? [...BOT_PROFILES] : BOT_PROFILES.filter(p => p.name === profileName),
         profileIndex: 0,
+        // Granular event tracking
+        events: [],             // all events for current day
+        posLog: [],             // position samples for current day
+        posSampleTimer: 0,      // timer for position sampling
+        stationVisits: [],      // ordered station visit log for current day
+        lastActions: [],        // last N actions for stuck detection
+        lastMeaningfulAction: 0, // timestamp of last meaningful action
+        stuckFlags: [],         // stuck incidents detected
+        dayTimeSpent: {},       // time spent near each station per day
+        nearStation: null,      // which station player is currently near
+        nearTimer: 0,           // how long near current station
     };
 
     console.log('%c[BOT] Post Haste Simulation', 'color: #2B4570; font-weight: bold; font-size: 14px');
@@ -2806,11 +2817,87 @@ function botStartProfile() {
     startDay();
 }
 
+function simpleHash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+        h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+    }
+    return 'R' + Math.abs(h).toString(36).slice(0, 6);
+}
+
+function botLogEvent(type, data) {
+    const t = DAY_BASE_TIME - state.timeLeft;
+    bot.events.push({ t: parseFloat(t.toFixed(2)), type, ...data });
+
+    // Track for stuck detection
+    bot.lastActions.push(type + ':' + (data.station || data.bin || ''));
+    if (bot.lastActions.length > 12) bot.lastActions.shift();
+    bot.lastMeaningfulAction = t;
+}
+
+function botCheckStuck() {
+    // Check for action loop: last 10 actions are the same 2-3 repeating
+    if (bot.lastActions.length >= 10) {
+        const last5 = bot.lastActions.slice(-5).join(',');
+        const prev5 = bot.lastActions.slice(-10, -5).join(',');
+        if (last5 === prev5) {
+            const elapsed = DAY_BASE_TIME - state.timeLeft;
+            bot.stuckFlags.push({ t: elapsed, type: 'action_loop', pattern: last5 });
+            bot.lastActions = []; // reset to break the loop
+            // Force a random target to break out
+            const stations = ['incoming', 'sorting', 'counter', 'outgoing'];
+            bot.target = stations[Math.floor(Math.random() * stations.length)];
+            bot.targetLock = 2;
+        }
+    }
+
+    // Check for position stuck: barely moved in recent samples
+    if (bot.posLog.length >= 6) {
+        const recent = bot.posLog.slice(-6);
+        const dx = Math.abs(recent[0].x - recent[5].x);
+        const dy = Math.abs(recent[0].y - recent[5].y);
+        if (dx < 5 && dy < 5 && state.screen === 'playing') {
+            const elapsed = DAY_BASE_TIME - state.timeLeft;
+            bot.stuckFlags.push({ t: elapsed, type: 'position_stuck', x: recent[0].x, y: recent[0].y });
+            // Force movement to random station
+            const stations = ['incoming', 'sorting', 'counter', 'outgoing'];
+            bot.target = stations[Math.floor(Math.random() * stations.length)];
+            bot.targetLock = 2;
+        }
+    }
+}
+
+function botSamplePosition(dt) {
+    bot.posSampleTimer += dt;
+    if (bot.posSampleTimer >= 0.5) {
+        bot.posSampleTimer -= 0.5;
+        bot.posLog.push({
+            x: Math.round(state.player.x),
+            y: Math.round(state.player.y),
+            t: parseFloat((DAY_BASE_TIME - state.timeLeft).toFixed(1)),
+        });
+        botCheckStuck();
+
+        // Track time spent near stations
+        let currentNear = null;
+        for (const key in STATIONS) {
+            if (nearStation(key)) { currentNear = key; break; }
+        }
+        if (currentNear) {
+            if (!bot.dayTimeSpent[currentNear]) bot.dayTimeSpent[currentNear] = 0;
+            bot.dayTimeSpent[currentNear] += 0.5;
+        }
+    }
+}
+
 function botUpdate(dt) {
     if (!bot || !bot.active) return;
 
     const profile = bot.currentProfile;
     const scaledDt = dt * bot.speed;
+
+    // Sample position for route tracking
+    if (state.screen === 'playing') botSamplePosition(scaledDt);
 
     // AFK simulation — random pauses
     if (bot.afkTimer > 0) {
@@ -2820,7 +2907,9 @@ function botUpdate(dt) {
         return;
     }
     if (Math.random() < profile.afkChance * dt) {
-        bot.afkTimer = 0.5 + Math.random() * 2;
+        const duration = 0.5 + Math.random() * 2;
+        bot.afkTimer = duration;
+        botLogEvent('afk', { duration: parseFloat(duration.toFixed(1)) });
         return;
     }
 
@@ -2841,13 +2930,20 @@ function botPlayUpdate(dt) {
     // Reconsider target periodically or when current target is done
     bot.targetLock -= dt;
     if (!bot.target || bot.targetLock <= 0) {
+        const prevTarget = bot.target;
         bot.target = botChooseTarget();
-        bot.targetLock = 0.5 + Math.random() * 1.5; // re-evaluate every 0.5-2s
+        bot.targetLock = 0.5 + Math.random() * 1.5;
 
         // Random chance to pick a wrong/suboptimal station
+        let wrongPick = false;
         if (Math.random() < profile.wrongStationChance) {
             const stations = ['incoming', 'sorting', 'counter', 'outgoing'];
             bot.target = stations[Math.floor(Math.random() * stations.length)];
+            wrongPick = true;
+        }
+        if (bot.target !== prevTarget) {
+            botLogEvent('target', { station: bot.target, reason: wrongPick ? 'wrong_pick' : 'priority', from: prevTarget });
+            bot.stationVisits.push(bot.target);
         }
     }
 
@@ -2934,10 +3030,18 @@ function botSortUpdate(dt) {
     if (correct) {
         targetDir = activeBins[state.sortItem.bin].dir;
     } else {
-        // Pick a random wrong bin
         const wrongBins = activeBins.filter((_, i) => i !== state.sortItem.bin);
         targetDir = wrongBins[Math.floor(Math.random() * wrongBins.length)].dir;
     }
+
+    botLogEvent('sort', {
+        correct,
+        bin: targetDir,
+        expected: activeBins[state.sortItem.bin].dir,
+        isParcel: state.sortItem.isParcel,
+        streak: state.streak + (correct ? 1 : 0),
+        thinkTime: parseFloat((0.15 + Math.random() * 0.4).toFixed(2)),
+    });
 
     // Simulate swipe
     const swipeLen = 60;
@@ -2957,7 +3061,17 @@ function botSortUpdate(dt) {
 }
 
 function botDayEnd() {
-    // Log day data
+    // Compute route pattern signature (station visit order compressed)
+    const visitPattern = bot.stationVisits.join('->');
+    const uniqueVisits = [...new Set(bot.stationVisits)].length;
+
+    // Count event types
+    const sortEvents = bot.events.filter(e => e.type === 'sort');
+    const correctSorts = sortEvents.filter(e => e.correct).length;
+    const afkEvents = bot.events.filter(e => e.type === 'afk');
+    const wrongPicks = bot.events.filter(e => e.type === 'target' && e.reason === 'wrong_pick').length;
+
+    // Log day data with granular detail
     bot.dayLog.push({
         day: state.day - 1,
         coins: state.dayCoins,
@@ -2968,7 +3082,29 @@ function botDayEnd() {
         streak: state.bestStreak,
         stars: state.dayStars,
         totalCoins: state.coins + state.dayCoins,
+        // Granular data
+        events: bot.events.length,
+        route: bot.posLog,
+        stationVisitOrder: bot.stationVisits,
+        stationVisitCount: bot.stationVisits.length,
+        uniqueStationsUsed: uniqueVisits,
+        timeAtStations: { ...bot.dayTimeSpent },
+        afkCount: afkEvents.length,
+        afkTotalTime: parseFloat(afkEvents.reduce((s, e) => s + (e.duration || 0), 0).toFixed(1)),
+        wrongPickCount: wrongPicks,
+        sortDetails: sortEvents.map(e => ({ correct: e.correct, bin: e.bin, thinkTime: e.thinkTime })),
+        stuckFlags: [...bot.stuckFlags],
+        routePatternHash: simpleHash(visitPattern),
     });
+
+    // Reset per-day tracking
+    bot.events = [];
+    bot.posLog = [];
+    bot.stationVisits = [];
+    bot.lastActions = [];
+    bot.stuckFlags = [];
+    bot.dayTimeSpent = {};
+    bot.posSampleTimer = 0;
 
     // Check if done with this profile
     if (state.day > bot.maxDays) {
@@ -3019,6 +3155,30 @@ function botEndProfile() {
     const accuracy = totalSorted > 0 ? ((totalSorted / (totalSorted + totalMissorts)) * 100).toFixed(1) : '0';
     const bestStreak = Math.max(...log.map(d => d.streak));
 
+    // Route pattern analysis: how many unique route patterns?
+    const routeHashes = log.map(d => d.routePatternHash);
+    const uniqueRoutes = new Set(routeHashes).size;
+    const mostCommonRoute = routeHashes.sort((a, b) =>
+        routeHashes.filter(v => v === b).length - routeHashes.filter(v => v === a).length
+    )[0];
+    const routeRepeatPct = ((routeHashes.filter(h => h === mostCommonRoute).length / log.length) * 100).toFixed(0);
+
+    // Stuck analysis
+    const totalStuckEvents = log.reduce((s, d) => s + d.stuckFlags.length, 0);
+
+    // Station time analysis
+    const stationTotals = { incoming: 0, sorting: 0, counter: 0, outgoing: 0 };
+    for (const d of log) {
+        for (const key in d.timeAtStations) {
+            stationTotals[key] = (stationTotals[key] || 0) + d.timeAtStations[key];
+        }
+    }
+    const totalStationTime = Object.values(stationTotals).reduce((s, v) => s + v, 0);
+    const stationPcts = {};
+    for (const key in stationTotals) {
+        stationPcts[key] = totalStationTime > 0 ? ((stationTotals[key] / totalStationTime) * 100).toFixed(0) + '%' : '0%';
+    }
+
     const summary = {
         profile: profile.name,
         days: log.length,
@@ -3032,6 +3192,18 @@ function botEndProfile() {
         totalStars,
         bestStreak,
         finalUpgrades: { ...state.upgrades },
+        // Route diversity
+        uniqueRoutePatterns: uniqueRoutes,
+        routeRepetitionPct: routeRepeatPct + '%',
+        // Stuck detection
+        totalStuckEvents,
+        stuckDays: log.filter(d => d.stuckFlags.length > 0).map(d => d.day),
+        // Time distribution
+        stationTimeDistribution: stationPcts,
+        // AFK stats
+        totalAfkEvents: log.reduce((s, d) => s + d.afkCount, 0),
+        totalWrongPicks: log.reduce((s, d) => s + d.wrongPickCount, 0),
+        // Full day data
         dayBreakdown: log,
     };
 
@@ -3041,15 +3213,19 @@ function botEndProfile() {
     console.table([{
         Profile: profile.name,
         Days: log.length,
-        'Total Coins': totalCoins,
+        'Coins': totalCoins,
         'Avg/Day': avgCoins,
         'Sorted': totalSorted,
         'Accuracy': accuracy + '%',
         'Stars': totalStars,
-        'Best Streak': bestStreak,
-        'Final Cap': state.maxStack,
-        'Final Speed': state.moveSpeed.toFixed(1),
+        'Streak': bestStreak,
+        'Cap': state.maxStack,
+        'Spd': state.moveSpeed.toFixed(1),
+        'Routes': uniqueRoutes,
+        'Repeat%': routeRepeatPct + '%',
+        'Stuck': totalStuckEvents,
     }]);
+    console.log(`  Station time: IN=${stationPcts.incoming} SORT=${stationPcts.sorting} SERVE=${stationPcts.counter} OUT=${stationPcts.outgoing}`);
 
     // Next profile
     bot.profileIndex++;
@@ -3064,16 +3240,30 @@ function botFinish() {
     // Print comparison table
     console.table(bot.results.map(r => ({
         Profile: r.profile,
-        Days: r.days,
-        'Total Coins': r.totalCoins,
-        'Avg Coins/Day': r.avgCoinsPerDay,
-        'Total Sorted': r.totalSorted,
-        'Accuracy': r.accuracy,
+        'Coins': r.totalCoins,
+        'Avg/Day': r.avgCoinsPerDay,
+        'Sorted': r.totalSorted,
+        'Acc%': r.accuracy,
         'Stars': r.totalStars,
-        'Best Streak': r.bestStreak,
-        'Final Cap': r.finalUpgrades.capacity + 3,
-        'Final Speed Lv': r.finalUpgrades.speed,
+        'Streak': r.bestStreak,
+        'Cap': r.finalUpgrades.capacity + 3,
+        'Spd': r.finalUpgrades.speed,
+        'Routes': r.uniqueRoutePatterns,
+        'Rpt%': r.routeRepetitionPct,
+        'Stuck': r.totalStuckEvents,
+        'AFK': r.totalAfkEvents,
+        'WrongPick': r.totalWrongPicks,
     })));
+
+    // Flag problems
+    for (const r of bot.results) {
+        if (r.totalStuckEvents > 0) {
+            console.warn(`[BOT] WARNING: ${r.profile} got stuck ${r.totalStuckEvents} time(s) on days: ${r.stuckDays.join(', ')}`);
+        }
+        if (parseInt(r.routeRepetitionPct) > 80) {
+            console.warn(`[BOT] WARNING: ${r.profile} used same route ${r.routeRepetitionPct} of the time — low variance`);
+        }
+    }
 
     // Expose for programmatic access
     window.BOT_RESULTS = bot.results;
