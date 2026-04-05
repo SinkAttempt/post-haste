@@ -56,94 +56,124 @@ const FIXED_FEATURES = [
 ];
 
 // ============================================================
-// FLOOR HAZARDS — random obstacles that inject variance
+// FLOOR HAZARDS — dynamic spawn/despawn during gameplay
 // ============================================================
 const HAZARD_TYPES = [
     {
         name: 'coffee',
         icon: '\u{2615}',
-        label: 'Spilled Coffee',
         radius: 22,
-        effect: 'slow',       // slows player to 40% speed
+        effect: 'slow',
         slowFactor: 0.4,
         moves: false,
     },
     {
         name: 'cat',
         icon: '\u{1F408}',
-        label: 'Office Cat',
         radius: 16,
-        effect: 'bump',       // bumps player in random direction
-        bumpForce: 3,
+        effect: 'bump',
+        bumpForce: 3.5,
         moves: true,
         moveSpeed: 1.2,
     },
     {
         name: 'box',
         icon: '\u{1F4E6}',
-        label: 'Dropped Box',
         radius: 20,
-        effect: 'block',      // solid obstacle, push player out
+        effect: 'block',
         moves: false,
     },
 ];
 
-function spawnHazards() {
-    const hazards = [];
-    // Day 1: just one coffee to introduce the concept. After that, scale up.
-    const maxHazards = state.day <= 1 ? 1 : Math.min(2 + Math.floor(state.day / 4), 5);
-    const count = 1 + Math.floor(Math.random() * maxHazards);
+// Max active hazards: 1 on day 1, scales up
+function hazardCap() {
+    if (state.day <= 1) return 1;
+    return Math.min(2 + Math.floor(state.day / 6), 4);
+}
 
-    for (let i = 0; i < count; i++) {
-        const type = HAZARD_TYPES[Math.floor(Math.random() * HAZARD_TYPES.length)];
-        // Pick a random position inside the office, away from stations
-        let x, y, valid;
-        let attempts = 0;
-        do {
-            x = OFFICE.x + 40 + Math.random() * (OFFICE.w - 80);
-            y = OFFICE.y + 60 + Math.random() * (OFFICE.h - 120);
-            valid = true;
-            // Not too close to any station
-            for (const key in STATIONS) {
-                const sc = stationCenter(STATIONS[key]);
-                if (dist(x, y, sc.x, sc.y) < 60) { valid = false; break; }
-            }
-            // Not too close to player start
-            if (dist(x, y, 195, 350) < 50) valid = false;
-            attempts++;
-        } while (!valid && attempts < 20);
-
-        if (valid) {
-            hazards.push({
-                type,
-                x, y,
-                // Cat movement state
-                vx: type.moves ? (Math.random() - 0.5) * type.moveSpeed : 0,
-                vy: type.moves ? (Math.random() - 0.5) * type.moveSpeed : 0,
-                dirTimer: 2 + Math.random() * 3, // time until cat changes direction
-                bumpCooldown: 0,
-            });
+function hazardSpawnPos() {
+    let x, y, valid;
+    let attempts = 0;
+    do {
+        x = OFFICE.x + 40 + Math.random() * (OFFICE.w - 80);
+        y = OFFICE.y + 60 + Math.random() * (OFFICE.h - 120);
+        valid = true;
+        for (const key in STATIONS) {
+            const sc = stationCenter(STATIONS[key]);
+            if (dist(x, y, sc.x, sc.y) < 55) { valid = false; break; }
         }
-    }
-    return hazards;
+        if (dist(x, y, state.player.x, state.player.y) < 60) valid = false;
+        // Not too close to existing hazards
+        for (const h of state.hazards) {
+            if (dist(x, y, h.x, h.y) < 50) { valid = false; break; }
+        }
+        attempts++;
+    } while (!valid && attempts < 30);
+    return valid ? { x, y } : null;
+}
+
+function spawnOneHazard() {
+    const pos = hazardSpawnPos();
+    if (!pos) return null;
+    const type = HAZARD_TYPES[Math.floor(Math.random() * HAZARD_TYPES.length)];
+    return {
+        type,
+        x: pos.x, y: pos.y,
+        // Lifecycle: warn → active → blink → gone
+        phase: 'warn',     // 'warn' (1.5s) → 'active' (8-15s) → 'blink' (2s) → remove
+        phaseTimer: 1.5,
+        lifespan: 8 + Math.random() * 7,
+        // Cat movement
+        vx: type.moves ? (Math.random() - 0.5) * type.moveSpeed : 0,
+        vy: type.moves ? (Math.random() - 0.5) * type.moveSpeed : 0,
+        dirTimer: 2 + Math.random() * 3,
+        bumpCooldown: 0,
+    };
+}
+
+function initHazardScheduler() {
+    // Start with a delay before first hazard on day 1
+    state.hazards = [];
+    state.hazardSpawnTimer = state.day <= 1 ? 8 : 3 + Math.random() * 4;
 }
 
 function updateHazards(dt) {
-    for (const h of state.hazards) {
-        h.bumpCooldown = Math.max(0, h.bumpCooldown - dt);
+    // Spawn new hazards on timer
+    if (state.hazards.length < hazardCap()) {
+        state.hazardSpawnTimer -= dt;
+        if (state.hazardSpawnTimer <= 0) {
+            const h = spawnOneHazard();
+            if (h) state.hazards.push(h);
+            state.hazardSpawnTimer = 4 + Math.random() * 6; // 4-10s between spawns
+        }
+    }
 
-        // Move wandering hazards (cat)
-        if (h.type.moves) {
+    // Update each hazard
+    for (let i = state.hazards.length - 1; i >= 0; i--) {
+        const h = state.hazards[i];
+        h.bumpCooldown = Math.max(0, h.bumpCooldown - dt);
+        h.phaseTimer -= dt;
+
+        // Phase transitions
+        if (h.phase === 'warn' && h.phaseTimer <= 0) {
+            h.phase = 'active';
+            h.phaseTimer = h.lifespan;
+        } else if (h.phase === 'active' && h.phaseTimer <= 0) {
+            h.phase = 'blink';
+            h.phaseTimer = 2.0;
+        } else if (h.phase === 'blink' && h.phaseTimer <= 0) {
+            state.hazards.splice(i, 1);
+            continue;
+        }
+
+        // Move wandering hazards (cat) — only when active
+        if (h.type.moves && h.phase === 'active') {
             h.x += h.vx;
             h.y += h.vy;
-
-            // Bounce off office walls
             if (h.x < OFFICE.x + 30 || h.x > OFFICE.x + OFFICE.w - 30) h.vx *= -1;
             if (h.y < OFFICE.y + 30 || h.y > OFFICE.y + OFFICE.h - 30) h.vy *= -1;
             h.x = Math.max(OFFICE.x + 20, Math.min(OFFICE.x + OFFICE.w - 20, h.x));
             h.y = Math.max(OFFICE.y + 20, Math.min(OFFICE.y + OFFICE.h - 20, h.y));
-
-            // Random direction changes
             h.dirTimer -= dt;
             if (h.dirTimer <= 0) {
                 h.vx = (Math.random() - 0.5) * h.type.moveSpeed * 2;
@@ -154,27 +184,47 @@ function updateHazards(dt) {
     }
 }
 
-// Returns speed multiplier and any bump to apply
+// Returns speed multiplier, bump vector, and whether items were dropped
 function checkHazardCollisions() {
     let speedMult = 1.0;
     let bumpX = 0, bumpY = 0;
+    let droppedItem = false;
 
     for (const h of state.hazards) {
+        if (h.phase !== 'active') continue; // only active hazards have collision
+
         const d = dist(state.player.x, state.player.y, h.x, h.y);
         const touchDist = PLAYER_RADIUS + h.type.radius;
 
         if (d < touchDist) {
             if (h.type.effect === 'slow') {
                 speedMult = Math.min(speedMult, h.type.slowFactor);
+                // Coffee + fragile = break the fragile item
+                if (state.stack.length > 0) {
+                    const fragileIdx = state.stack.findIndex(item => item.isFragile);
+                    if (fragileIdx >= 0 && h.bumpCooldown <= 0) {
+                        state.stack.splice(fragileIdx, 1);
+                        floatingTexts.push(createFloatingText('FRAGILE BROKEN!', h.x, h.y - 20, COL.red, 16));
+                        addShake(1.5);
+                        h.bumpCooldown = 3.0; // long cooldown so it doesn't chain-break
+                        droppedItem = true;
+                    }
+                }
             }
             if (h.type.effect === 'bump' && h.bumpCooldown <= 0) {
                 const angle = Math.atan2(state.player.y - h.y, state.player.x - h.x);
                 bumpX += Math.cos(angle) * h.type.bumpForce;
                 bumpY += Math.sin(angle) * h.type.bumpForce;
-                h.bumpCooldown = 1.0; // 1s cooldown between bumps
+                h.bumpCooldown = 1.0;
+                // Cat bump while carrying: 25% chance to drop top item
+                if (state.stack.length > 0 && Math.random() < 0.25) {
+                    const dropped = state.stack.pop();
+                    floatingTexts.push(createFloatingText('DROPPED!', state.player.x, state.player.y - 30, COL.red, 16));
+                    addShake(1);
+                    droppedItem = true;
+                }
             }
-            if (h.type.effect === 'block' && d < touchDist) {
-                // Push player out of the box
+            if (h.type.effect === 'block') {
                 const angle = Math.atan2(state.player.y - h.y, state.player.x - h.x);
                 const pushDist = touchDist - d + 1;
                 state.player.x += Math.cos(angle) * pushDist;
@@ -183,12 +233,40 @@ function checkHazardCollisions() {
         }
     }
 
-    return { speedMult, bumpX, bumpY };
+    return { speedMult, bumpX, bumpY, droppedItem };
 }
 
 function drawHazards() {
     for (const h of state.hazards) {
         ctx.save();
+
+        // Phase-based rendering
+        if (h.phase === 'warn') {
+            // Warning: pulsing circle, no icon yet
+            const pulse = 0.2 + Math.sin(Date.now() * 0.01) * 0.15;
+            ctx.globalAlpha = pulse;
+            ctx.fillStyle = '#FF4444';
+            ctx.beginPath();
+            ctx.arc(h.x, h.y, h.type.radius + 8, 0, Math.PI * 2);
+            ctx.fill();
+            // Exclamation mark
+            ctx.globalAlpha = pulse + 0.3;
+            ctx.fillStyle = COL.red;
+            ctx.font = 'bold 18px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('!', h.x, h.y);
+            ctx.restore();
+            continue;
+        }
+
+        if (h.phase === 'blink') {
+            // Blinking out: rapid flash
+            if (Math.sin(Date.now() * 0.02) > 0) {
+                ctx.restore();
+                continue; // invisible half the time
+            }
+        }
 
         // Shadow
         ctx.fillStyle = COL.shadow;
@@ -196,7 +274,7 @@ function drawHazards() {
         ctx.ellipse(h.x + 2, h.y + 2, h.type.radius, h.type.radius * 0.6, 0, 0, Math.PI * 2);
         ctx.fill();
 
-        // Hazard zone circle (subtle)
+        // Hazard zone (subtle)
         ctx.globalAlpha = 0.15;
         ctx.fillStyle = h.type.effect === 'slow' ? '#8B4513' : h.type.effect === 'bump' ? '#FF8C00' : '#666';
         ctx.beginPath();
@@ -208,8 +286,6 @@ function drawHazards() {
         ctx.font = (h.type.radius + 6) + 'px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-
-        // Cat faces the direction it's moving
         if (h.type.moves && h.vx < -0.2) {
             ctx.save();
             ctx.translate(h.x, h.y);
@@ -568,8 +644,9 @@ const state = {
 
     // Day modifiers (randomised each day for variety)
     dayMod: null,  // { name, mailMult, custMult, tipMult, parcelBoost }
-    dayEvents: [], // random events scheduled for current day
-    hazards: [],   // floor hazards for current day
+    dayEvents: [],        // random events scheduled for current day
+    hazards: [],          // active floor hazards
+    hazardSpawnTimer: 5,  // seconds until next hazard spawn attempt
 };
 
 // ============================================================
@@ -915,10 +992,12 @@ function handleSortSwipe(endX, endY) {
             sfxStreak();
         }
     } else {
-        // Wrong sort — soft shake, not aggressive
+        // Wrong sort — coin penalty
         state.streak = 0;
         state.missortCount++;
-        floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
+        const penalty = Math.min(state.dayCoins, 2);
+        state.dayCoins -= penalty;
+        floatingTexts.push(createFloatingText('-' + penalty + ' MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
         addShake(1.5);
         addBump(0, 0.5);
         sfxWrong();
@@ -1454,8 +1533,8 @@ function startDay() {
         }
     }
 
-    // Spawn floor hazards
-    state.hazards = spawnHazards();
+    // Init dynamic hazard spawner
+    initHazardScheduler();
 }
 
 function endDay() {
@@ -1591,7 +1670,13 @@ function update(dt) {
     for (let i = state.customers.length - 1; i >= 0; i--) {
         state.customers[i].patience -= dt * 1000;
         if (state.customers[i].patience <= 0) {
-            state.customers.splice(i, 1); // Customer left angry
+            // Customer left angry — coin penalty
+            const penalty = Math.min(state.dayCoins, 3);
+            state.dayCoins -= penalty;
+            const cc = stationCenter(STATIONS.counter);
+            floatingTexts.push(createFloatingText('-' + penalty + ' left angry!', cc.x, cc.y - 30, COL.red, 14));
+            state.customers.splice(i, 1);
+            setMoodOverride('oops', 1.0);
         }
     }
 
@@ -1599,13 +1684,16 @@ function update(dt) {
     if (state.outgoingDeadline > 0 && state.outgoingPile.length > 0) {
         state.outgoingTimer += dt;
         if (state.outgoingTimer >= state.outgoingDeadline) {
-            // Mail expired — van left without it
+            // Mail expired — van left without it, coin penalty
             const lost = state.outgoingPile.length;
+            const penalty = Math.min(state.dayCoins, lost * 2);
+            state.dayCoins -= penalty;
             state.outgoingPile = [];
             state.outgoingTimer = 0;
             const oc = stationCenter(STATIONS.outgoing);
-            floatingTexts.push(createFloatingText('Van left! -' + lost, oc.x, oc.y - 30, COL.red, 18));
-            addShake(1);
+            floatingTexts.push(createFloatingText('Van left! -' + penalty, oc.x, oc.y - 30, COL.red, 18));
+            addShake(1.5);
+            setMoodOverride('oops', 1.5);
         }
     }
 
