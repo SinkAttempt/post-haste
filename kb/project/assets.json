@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "project": "Post Haste",
+    "updated": "2026-04-05",
+    "note": "Prototype uses placeholder shapes. This manifest tracks real assets when art is produced."
+  },
+  "palette": {
+    "primary": "#2B4570",
+    "secondary": "#A37B4F",
+    "accent": "#D4483B",
+    "background": "#F5F0E8",
+    "text": "#1A1A2E"
+  },
+  "assets": []
+}
