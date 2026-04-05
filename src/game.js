@@ -3011,6 +3011,31 @@ function botChooseTarget() {
     return options[options.length - 1].key;
 }
 
+// Pure version for Node runner (no dependency on bot global)
+function botChooseTargetPure(profile) {
+    const weight = stackWeight();
+    const options = [];
+    if (state.incomingPile.length > 0 && weight < state.maxStack) {
+        options.push({ key: 'incoming', w: profile.sortPriority * (1 + state.incomingPile.length * 0.2) });
+    }
+    if (state.stack.length > 0) {
+        options.push({ key: 'sorting', w: profile.sortPriority * (1 + state.stack.length * 0.5) });
+    }
+    if (state.customers.length > 0) {
+        const urgency = state.customers.some(c => c.patience < 5000) ? 3 : 1;
+        options.push({ key: 'counter', w: profile.servePriority * urgency });
+    }
+    if (state.outgoingPile.length > 0) {
+        const urgency = (state.outgoingDeadline > 0 && state.outgoingTimer > state.outgoingDeadline * 0.6) ? 3 : 1;
+        options.push({ key: 'outgoing', w: profile.dispatchPriority * urgency * (1 + state.outgoingPile.length * 0.3) });
+    }
+    if (options.length === 0) return 'incoming';
+    const totalW = options.reduce((sum, o) => sum + o.w, 0);
+    let r = Math.random() * totalW;
+    for (const o of options) { r -= o.w; if (r <= 0) return o.key; }
+    return options[options.length - 1].key;
+}
+
 function botSortUpdate(dt) {
     const profile = bot.currentProfile;
 
