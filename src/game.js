@@ -127,6 +127,27 @@ const MAIL_SPAWN_INTERVAL_BASE = 2000; // ms between new mail at incoming
 const CUSTOMER_SPAWN_INTERVAL_BASE = 5000; // ms between customers
 const CUSTOMER_PATIENCE = 12000; // ms before customer leaves
 
+// Day modifiers — rolled randomly each day for variety
+const DAY_MODS = [
+    { name: 'normal',    mailMult: 1.0, custMult: 1.0, tipMult: 1.0, parcelBoost: 0,   weight: 5 },
+    { name: 'busy',      mailMult: 1.4, custMult: 1.3, tipMult: 0.9, parcelBoost: 0,   weight: 2 },
+    { name: 'slow',      mailMult: 0.6, custMult: 0.7, tipMult: 1.5, parcelBoost: 0,   weight: 2 },
+    { name: 'parcels',   mailMult: 1.0, custMult: 1.0, tipMult: 1.0, parcelBoost: 0.3, weight: 2 },
+    { name: 'rush hour', mailMult: 1.6, custMult: 1.5, tipMult: 1.2, parcelBoost: 0,   weight: 1 },
+];
+
+function rollDayMod() {
+    // Day 1 is always normal (tutorial)
+    if (state.day <= 1) return DAY_MODS[0];
+    const totalWeight = DAY_MODS.reduce((s, m) => s + m.weight, 0);
+    let roll = Math.random() * totalWeight;
+    for (const mod of DAY_MODS) {
+        roll -= mod.weight;
+        if (roll <= 0) return mod;
+    }
+    return DAY_MODS[0];
+}
+
 // ============================================================
 // AUDIO — cozy synthesised SFX (no external files)
 // ============================================================
@@ -375,6 +396,10 @@ const state = {
     tutorialComplete: false, // true after first full cycle
     playerHasMoved: false,   // tracks if player has ever moved
     youIndicatorTimer: 0,    // seconds the "YOU" arrow has been showing
+
+    // Day modifiers (randomised each day for variety)
+    dayMod: null,  // { name, mailMult, custMult, tipMult, parcelBoost }
+    dayEvents: [], // random events scheduled for current day
 };
 
 // ============================================================
@@ -435,7 +460,8 @@ const MILESTONES = [
 function createMail() {
     const binCount = state.sortBinCount;
     const binIdx = Math.floor(Math.random() * binCount);
-    const isParcel = state.day >= 4 && Math.random() < (0.2 + state.day * 0.02);
+    const parcelBoost = (state.dayMod && state.dayMod.parcelBoost) || 0;
+    const isParcel = state.day >= 4 && Math.random() < (0.2 + state.day * 0.02 + parcelBoost);
     const isFragile = state.day >= 16 && isParcel && Math.random() < 0.25;
     return {
         id: mailIdCounter++,
@@ -694,7 +720,9 @@ function handleSortSwipe(endX, endY) {
         state.streak++;
         if (state.streak > state.bestStreak) state.bestStreak = state.streak;
         const multiplier = Math.min(1 + (state.streak - 1) * 0.5, 3);
-        const earned = Math.floor(state.sortItem.isParcel ? 5 * multiplier : 2 * multiplier);
+        const baseEarn = state.sortItem.isParcel ? 5 : 2;
+        const coinJitter = Math.random() < 0.2 ? (Math.random() < 0.5 ? 1 : -1) : 0; // ±1 coin 20% of the time
+        const earned = Math.max(1, Math.floor(baseEarn * multiplier) + coinJitter);
         state.dayCoins += earned;
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
@@ -1180,6 +1208,7 @@ function startDay() {
     state.screen = 'playing';
     state.timeLeft = DAY_BASE_TIME;
     state.dayCoins = 0;
+    state.dayMod = rollDayMod();
     state.streak = 0;
     state.bestStreak = 0;
     state.sortedCount = 0;
@@ -1227,10 +1256,32 @@ function startDay() {
         state.milestoneTimer = 3.0; // show for 3 seconds
     }
 
-    // Seed initial mail — start busy, scale with day
-    const seedCount = Math.min(2 + Math.floor(state.day / 5), 5);
+    // Seed initial mail — randomised starting pile
+    const seedBase = Math.min(2 + Math.floor(state.day / 5), 5);
+    const seedVariance = Math.floor(Math.random() * 4) - 1; // -1 to +2
+    const seedCount = Math.max(1, seedBase + seedVariance);
     for (let i = 0; i < seedCount; i++) {
         state.incomingPile.push(createMail());
+    }
+
+    // Schedule random events for this day
+    state.dayEvents = [];
+    if (state.day >= 2) {
+        // Mail drought: no mail spawns for 10-15s (20% chance)
+        if (Math.random() < 0.20) {
+            const startAt = 10 + Math.floor(Math.random() * 30);
+            state.dayEvents.push({ type: 'drought', startAt, duration: 10 + Math.floor(Math.random() * 6), active: false, done: false });
+        }
+        // Mail avalanche: dump 4-6 letters at once (15% chance)
+        if (Math.random() < 0.15) {
+            const triggerAt = 15 + Math.floor(Math.random() * 25);
+            state.dayEvents.push({ type: 'avalanche', triggerAt, done: false });
+        }
+        // VIP customer: huge tip (12% chance)
+        if (Math.random() < 0.12) {
+            const triggerAt = 20 + Math.floor(Math.random() * 25);
+            state.dayEvents.push({ type: 'vip', triggerAt, done: false });
+        }
     }
 }
 
@@ -1296,22 +1347,69 @@ function update(dt) {
         }
     }
 
-    // Spawn mail at incoming (game-time based)
-    const mailInterval = Math.max(3, 6 - state.day * 0.15);
+    // Process day events
+    const elapsed = DAY_BASE_TIME - state.timeLeft;
+    let inDrought = false;
+    for (const evt of state.dayEvents) {
+        if (evt.done) continue;
+        if (evt.type === 'drought') {
+            if (elapsed >= evt.startAt && elapsed < evt.startAt + evt.duration) {
+                inDrought = true;
+                evt.active = true;
+            } else if (elapsed >= evt.startAt + evt.duration) {
+                evt.done = true;
+            }
+        }
+        if (evt.type === 'avalanche' && elapsed >= evt.triggerAt) {
+            const count = 4 + Math.floor(Math.random() * 3); // 4-6
+            for (let i = 0; i < count && state.incomingPile.length < 10; i++) {
+                state.incomingPile.push(createMail());
+            }
+            evt.done = true;
+        }
+        if (evt.type === 'vip' && elapsed >= evt.triggerAt && state.customers.length < 3) {
+            state.customers.push({
+                id: Date.now(),
+                patience: (state.currentPatience || CUSTOMER_PATIENCE) * 1.5, // patient VIP
+                coins: 15 + Math.floor(Math.random() * 16), // 15-30 coins
+            });
+            evt.done = true;
+        }
+    }
+
+    // Spawn mail at incoming (game-time based, with jitter + day modifier)
+    const mod = state.dayMod || DAY_MODS[0];
+    const mailBase = Math.max(3, 6 - state.day * 0.15) / mod.mailMult;
+    const mailInterval = mailBase * (0.5 + Math.random() * 1.0); // ±50% jitter each cycle
     state.mailSpawnAcc += dt;
-    if (state.mailSpawnAcc >= mailInterval && state.incomingPile.length < 8) {
+    if (!inDrought && state.mailSpawnAcc >= mailInterval && state.incomingPile.length < 8) {
         state.incomingPile.push(createMail());
+        // Mail rush: small chance of a burst of extra mail
+        if (Math.random() < 0.12 && state.incomingPile.length < 6) {
+            const burst = 1 + Math.floor(Math.random() * 2); // 1-2 extra
+            for (let b = 0; b < burst && state.incomingPile.length < 8; b++) {
+                state.incomingPile.push(createMail());
+            }
+        }
         state.mailSpawnAcc = 0;
     }
 
-    // Spawn customers (game-time based)
-    const custInterval = Math.max(8, 15 - state.day * 0.3);
+    // Spawn customers (game-time based, with jitter + day modifier)
+    const custBase = Math.max(8, 15 - state.day * 0.3) / mod.custMult;
+    const custInterval = custBase * (0.6 + Math.random() * 0.8); // ±40% jitter
     state.customerSpawnAcc += dt;
     if (state.customerSpawnAcc >= custInterval && state.customers.length < 3) {
+        // Tip variance: occasional big tipper or stingy customer, scaled by day mod
+        let tipCoins = 4 + Math.floor(Math.random() * 6); // 4-9 base
+        tipCoins = Math.max(2, Math.round(tipCoins * mod.tipMult));
+        const tipRoll = Math.random();
+        if (tipRoll < 0.08) tipCoins = Math.floor(tipCoins * 2.5); // 8% big tipper
+        else if (tipRoll < 0.15) tipCoins = Math.max(2, Math.floor(tipCoins * 0.5)); // 7% stingy
+
         state.customers.push({
             id: Date.now(),
             patience: state.currentPatience || CUSTOMER_PATIENCE,
-            coins: 4 + Math.floor(Math.random() * 6),
+            coins: tipCoins,
         });
         state.customerSpawnAcc = 0;
     }
@@ -2071,10 +2169,16 @@ function drawHUD() {
     ctx.fillStyle = COL.white;
     ctx.textBaseline = 'middle';
 
-    // Day
+    // Day + modifier
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText('DAY ' + state.day, 15, 22);
+    if (state.dayMod && state.dayMod.name !== 'normal') {
+        ctx.fillStyle = COL.yellow;
+        ctx.font = 'bold 10px sans-serif';
+        ctx.fillText(state.dayMod.name.toUpperCase(), 15, 36);
+        ctx.fillStyle = COL.white;
+    }
 
     // Timer (centre, large)
     const mins = Math.floor(state.timeLeft / 60);
