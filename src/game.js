@@ -408,12 +408,12 @@ function handleSortSwipe(endX, endY) {
         state.dayCoins += earned;
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
-        floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H - 180, COL.green, 22));
+        floatingTexts.push(createFloatingText('+' + earned, CANVAS_W / 2, CANVAS_H / 2 - 95, COL.green, 22));
     } else {
         // Wrong sort — bounces back
         state.streak = 0;
         state.missortCount++;
-        floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H - 180, COL.red, 22));
+        floatingTexts.push(createFloatingText('MISS!', CANVAS_W / 2, CANVAS_H / 2 - 95, COL.red, 22));
     }
 
     // Next item or exit sort mode
