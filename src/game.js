@@ -1054,6 +1054,7 @@ function update(dt) {
         spawnParticles(cc.x, cc.y, COL.yellow, 8, 'sparkle');
         addBump(0, -2);
         sfxCoin();
+        setMoodOverride('tipjoy', 0.8);
     }
 
     // OUTGOING: Deposit sorted mail
@@ -1208,17 +1209,36 @@ function drawOutgoingDetails(s) {
     ctx.fillText(label, cx, y);
 }
 
+// Mood timer for temporary expressions (tip joy, etc)
+let moodOverride = null;
+let moodOverrideTimer = 0;
+
+function setMoodOverride(mood, duration) {
+    moodOverride = mood;
+    moodOverrideTimer = duration;
+}
+
 function getPlayerMood() {
-    // Excited: on a streak of 3+
-    if (state.streak >= 3) return 'excited';
-    // Sad: just missorted (shake still active)
-    if (screenShake.amount > 0.5) return 'sad';
-    // Happy: carrying mail or just sorted something
-    if (state.stack.length > 0 || state.sortedCount > 0) return 'happy';
-    // Happy: customers waiting and near counter
-    if (state.customers.length > 0 && nearStation('counter')) return 'happy';
-    // Neutral: idle
-    return 'neutral';
+    // Temporary override (tip joy, etc)
+    if (moodOverride && moodOverrideTimer > 0) return moodOverride;
+
+    // Streak excitement
+    if (state.streak >= 5) return 'thrilled';   // huge grin, starry eyes
+    if (state.streak >= 3) return 'excited';     // open mouth smile
+
+    // Missort sadness
+    if (screenShake.amount > 0.3) return 'oops';
+
+    // Carrying strain based on how full the bag is
+    const weight = stackWeight();
+    const capacity = state.maxStack;
+    if (weight >= capacity) return 'strained';       // bag is full, struggling
+    if (weight >= capacity * 0.6) return 'effort';   // getting heavy
+    if (weight > 0) return 'carrying';               // mild focus
+
+    // Nothing in hands
+    if (state.screen === 'playing') return 'idle';   // big relaxed smile
+    return 'idle';
 }
 
 function drawPlayer() {
@@ -1241,64 +1261,193 @@ function drawPlayer() {
     // Face — expression changes with game state
     const mood = getPlayerMood();
 
-    // Eyes
+    // Update mood override timer
+    if (moodOverrideTimer > 0) moodOverrideTimer -= 0.016;
+
+    // === EYES ===
     ctx.fillStyle = COL.white;
     ctx.beginPath();
-    if (mood === 'sad') {
-        // Droopy eyes (smaller, lower)
-        ctx.arc(px - 5, py - 3, 2.5, 0, Math.PI * 2);
-        ctx.arc(px + 5, py - 3, 2.5, 0, Math.PI * 2);
-    } else if (mood === 'happy') {
-        // Big bright eyes
-        ctx.arc(px - 5, py - 4, 3.5, 0, Math.PI * 2);
-        ctx.arc(px + 5, py - 4, 3.5, 0, Math.PI * 2);
-    } else if (mood === 'excited') {
-        // Squinting happy (closed smile eyes)
-        ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
-        ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
-    } else {
-        // Neutral
-        ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
-        ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
+    switch (mood) {
+        case 'idle':
+            // Big happy round eyes
+            ctx.arc(px - 5, py - 4, 3.5, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 3.5, 0, Math.PI * 2);
+            ctx.fill();
+            // Sparkle dot
+            ctx.fillStyle = '#AAD4FF';
+            ctx.beginPath();
+            ctx.arc(px - 3.5, py - 5.5, 1, 0, Math.PI * 2);
+            ctx.arc(px + 6.5, py - 5.5, 1, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+        case 'carrying':
+            // Normal focused eyes
+            ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+        case 'effort':
+            // Slightly squished eyes (straining)
+            ctx.ellipse(px - 5, py - 3, 3.5, 2.5, 0, 0, Math.PI * 2);
+            ctx.ellipse(px + 5, py - 3, 3.5, 2.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Sweat drop
+            ctx.fillStyle = '#88CCFF';
+            ctx.beginPath();
+            ctx.arc(px + 10, py - 6, 2, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+        case 'strained':
+            // Squeezed shut eyes (> < shape)
+            ctx.strokeStyle = COL.white;
+            ctx.lineWidth = 2;
+            ctx.moveTo(px - 7, py - 6); ctx.lineTo(px - 3, py - 3); ctx.moveTo(px - 7, py - 1); ctx.lineTo(px - 3, py - 3);
+            ctx.moveTo(px + 3, py - 6); ctx.lineTo(px + 7, py - 3); ctx.moveTo(px + 3, py - 1); ctx.lineTo(px + 7, py - 3);
+            ctx.stroke();
+            // Two sweat drops
+            ctx.fillStyle = '#88CCFF';
+            ctx.beginPath();
+            ctx.arc(px + 11, py - 6, 2, 0, Math.PI * 2);
+            ctx.arc(px - 11, py - 4, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+        case 'tipjoy':
+            // Big starry eyes
+            ctx.arc(px - 5, py - 4, 4, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 4, 0, Math.PI * 2);
+            ctx.fill();
+            // Star pupils
+            ctx.fillStyle = COL.yellow;
+            ctx.font = '6px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('\u{2605}', px - 5, py - 4);
+            ctx.fillText('\u{2605}', px + 5, py - 4);
+            break;
+        case 'excited':
+            // Happy arc eyes (closed smile)
+            ctx.strokeStyle = COL.white;
+            ctx.lineWidth = 2;
+            ctx.arc(px - 5, py - 3, 3, 1.1 * Math.PI, 1.9 * Math.PI);
+            ctx.moveTo(px + 8, py - 3);
+            ctx.arc(px + 5, py - 3, 3, 1.1 * Math.PI, 1.9 * Math.PI);
+            ctx.stroke();
+            break;
+        case 'thrilled':
+            // Huge starry eyes
+            ctx.arc(px - 5, py - 4, 4, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = COL.postal;
+            ctx.beginPath();
+            ctx.arc(px - 5, py - 4, 1.5, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+            // Sparkles around head
+            ctx.fillStyle = COL.streakGlow;
+            ctx.font = '7px sans-serif';
+            ctx.textAlign = 'center';
+            const sparkleOff = Math.sin(Date.now() * 0.006) * 2;
+            ctx.fillText('\u{2728}', px - 14, py - 8 + sparkleOff);
+            ctx.fillText('\u{2728}', px + 14, py - 6 - sparkleOff);
+            break;
+        case 'oops':
+            // Wide worried eyes
+            ctx.arc(px - 5, py - 4, 3.5, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 3.5, 0, Math.PI * 2);
+            ctx.fill();
+            // Tiny pupils (shocked)
+            ctx.fillStyle = COL.postal;
+            ctx.beginPath();
+            ctx.arc(px - 5, py - 4, 1, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 1, 0, Math.PI * 2);
+            ctx.fill();
+            break;
+        default:
+            ctx.arc(px - 5, py - 4, 3, 0, Math.PI * 2);
+            ctx.arc(px + 5, py - 4, 3, 0, Math.PI * 2);
+            ctx.fill();
     }
-    ctx.fill();
 
-    // Pupils for excited (tiny dots on white)
-    if (mood === 'excited') {
-        ctx.fillStyle = COL.postal;
-        ctx.beginPath();
-        ctx.arc(px - 5, py - 4, 1.2, 0, Math.PI * 2);
-        ctx.arc(px + 5, py - 4, 1.2, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // Mouth
+    // === MOUTH ===
     ctx.strokeStyle = COL.white;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    if (mood === 'sad') {
-        // Frown
-        ctx.arc(px, py + 6, 4, 1.1 * Math.PI, 1.9 * Math.PI);
-    } else if (mood === 'happy') {
-        // Smile
-        ctx.arc(px, py + 1, 5, 0.1 * Math.PI, 0.9 * Math.PI);
-    } else if (mood === 'excited') {
-        // Big open smile
-        ctx.arc(px, py + 1, 6, 0.05 * Math.PI, 0.95 * Math.PI);
-        ctx.stroke();
-        // Fill mouth
-        ctx.fillStyle = '#1a3050';
-        ctx.beginPath();
-        ctx.arc(px, py + 1, 6, 0.05 * Math.PI, 0.95 * Math.PI);
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath(); // reset for outer stroke
-    } else {
-        // Neutral line
-        ctx.moveTo(px - 4, py + 3);
-        ctx.lineTo(px + 4, py + 3);
+    switch (mood) {
+        case 'idle':
+            // Big relaxed smile
+            ctx.arc(px, py + 1, 6, 0.1 * Math.PI, 0.9 * Math.PI);
+            ctx.stroke();
+            break;
+        case 'carrying':
+            // Small pleasant smile
+            ctx.arc(px, py + 2, 4, 0.15 * Math.PI, 0.85 * Math.PI);
+            ctx.stroke();
+            break;
+        case 'effort':
+            // Gritting / wavy mouth
+            ctx.moveTo(px - 5, py + 3);
+            ctx.quadraticCurveTo(px - 2, py + 5, px, py + 3);
+            ctx.quadraticCurveTo(px + 2, py + 1, px + 5, py + 3);
+            ctx.stroke();
+            break;
+        case 'strained':
+            // Open grimace
+            ctx.arc(px, py + 4, 4, 0, Math.PI);
+            ctx.stroke();
+            ctx.fillStyle = '#1a3050';
+            ctx.beginPath();
+            ctx.arc(px, py + 4, 4, 0, Math.PI);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        case 'tipjoy':
+            // Big open happy "O!"
+            ctx.fillStyle = '#1a3050';
+            ctx.beginPath();
+            ctx.arc(px, py + 3, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = COL.white;
+            ctx.beginPath();
+            ctx.arc(px, py + 3, 4, 0, Math.PI * 2);
+            ctx.stroke();
+            break;
+        case 'excited':
+            // Open grin
+            ctx.arc(px, py + 1, 5, 0.05 * Math.PI, 0.95 * Math.PI);
+            ctx.stroke();
+            ctx.fillStyle = '#1a3050';
+            ctx.beginPath();
+            ctx.arc(px, py + 1, 5, 0.05 * Math.PI, 0.95 * Math.PI);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        case 'thrilled':
+            // Huge open grin
+            ctx.arc(px, py + 1, 7, 0.05 * Math.PI, 0.95 * Math.PI);
+            ctx.stroke();
+            ctx.fillStyle = '#1a3050';
+            ctx.beginPath();
+            ctx.arc(px, py + 1, 7, 0.05 * Math.PI, 0.95 * Math.PI);
+            ctx.closePath();
+            ctx.fill();
+            break;
+        case 'oops':
+            // Small "o" surprise mouth
+            ctx.fillStyle = '#1a3050';
+            ctx.beginPath();
+            ctx.ellipse(px, py + 4, 3, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = COL.white;
+            ctx.beginPath();
+            ctx.ellipse(px, py + 4, 3, 4, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            break;
+        default:
+            ctx.moveTo(px - 4, py + 3);
+            ctx.lineTo(px + 4, py + 3);
+            ctx.stroke();
     }
-    ctx.stroke();
 
     // Hat (postal cap)
     ctx.fillStyle = COL.postal;
