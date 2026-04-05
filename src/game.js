@@ -2670,8 +2670,20 @@ function gameLoop(timestamp) {
     const dt = lastTime ? Math.min((timestamp - lastTime) / 1000, 0.05) : 0.016;
     lastTime = timestamp;
 
-    update(dt);
-    render();
+    // Bot runs multiple ticks per frame for speed
+    if (bot && bot.active) {
+        const ticks = bot.speed;
+        for (let i = 0; i < ticks; i++) {
+            botUpdate(dt);
+            update(dt);
+        }
+    } else {
+        update(dt);
+    }
+
+    if (!bot || !bot.headless) {
+        render();
+    }
 
     requestAnimationFrame(gameLoop);
 }
@@ -2724,6 +2736,359 @@ function render() {
 }
 
 // ============================================================
+// BOT SIMULATION MODE — ?bot=true or ?bot=100 (num days)
+// ============================================================
+const BOT_PROFILES = [
+    { name: 'rookie',      accuracy: 0.6,  afkChance: 0.15, wrongStationChance: 0.25, sortPriority: 0.4, servePriority: 0.3, dispatchPriority: 0.3, upgradePreference: 'random' },
+    { name: 'balanced',    accuracy: 0.82, afkChance: 0.05, wrongStationChance: 0.1,  sortPriority: 0.4, servePriority: 0.3, dispatchPriority: 0.3, upgradePreference: 'random' },
+    { name: 'sorter',      accuracy: 0.92, afkChance: 0.03, wrongStationChance: 0.05, sortPriority: 0.7, servePriority: 0.1, dispatchPriority: 0.2, upgradePreference: 'capacity' },
+    { name: 'server',      accuracy: 0.75, afkChance: 0.05, wrongStationChance: 0.1,  sortPriority: 0.2, servePriority: 0.6, dispatchPriority: 0.2, upgradePreference: 'speed' },
+    { name: 'speedrunner', accuracy: 0.95, afkChance: 0.01, wrongStationChance: 0.02, sortPriority: 0.45, servePriority: 0.25, dispatchPriority: 0.3, upgradePreference: 'speed' },
+];
+
+let bot = null;
+
+function initBot() {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has('bot')) return;
+
+    const maxDays = parseInt(params.get('bot')) || 30;
+    const profileName = params.get('profile') || 'all';
+    const speed = parseInt(params.get('speed')) || 10; // game speed multiplier
+    const headless = params.get('headless') === 'true';
+
+    bot = {
+        active: true,
+        maxDays,
+        speed,
+        headless,
+        profileName,
+        currentProfile: null,
+        target: null,           // target station key
+        targetLock: 0,          // seconds before reconsidering target
+        afkTimer: 0,            // seconds of being "distracted"
+        thinkDelay: 0,          // delay before sort decision
+        results: [],            // per-profile results
+        dayLog: [],             // current profile's day data
+        allProfiles: profileName === 'all' ? [...BOT_PROFILES] : BOT_PROFILES.filter(p => p.name === profileName),
+        profileIndex: 0,
+    };
+
+    console.log('%c[BOT] Post Haste Simulation', 'color: #2B4570; font-weight: bold; font-size: 14px');
+    console.log(`[BOT] Running ${bot.allProfiles.length} profile(s), ${maxDays} days each, ${speed}x speed`);
+
+    // Start first profile
+    botStartProfile();
+}
+
+function botStartProfile() {
+    if (bot.profileIndex >= bot.allProfiles.length) {
+        botFinish();
+        return;
+    }
+    bot.currentProfile = bot.allProfiles[bot.profileIndex];
+    bot.dayLog = [];
+
+    // Reset game state for this profile
+    localStorage.removeItem('postHaste');
+    state.day = 1;
+    state.totalCoins = 0;
+    state.coins = 0;
+    state.totalStars = 0;
+    state.daysCompleted = 0;
+    state.upgrades = { capacity: 0, speed: 0, sortSpeed: 0 };
+    state.maxStack = 3;
+    state.moveSpeed = PLAYER_SPEED_BASE;
+    layout = JSON.parse(JSON.stringify(DEFAULT_LAYOUT));
+    rebuildStations();
+
+    console.log(`%c[BOT] Profile: ${bot.currentProfile.name}`, 'color: #4A8C5C; font-weight: bold');
+    startDay();
+}
+
+function botUpdate(dt) {
+    if (!bot || !bot.active) return;
+
+    const profile = bot.currentProfile;
+    const scaledDt = dt * bot.speed;
+
+    // AFK simulation — random pauses
+    if (bot.afkTimer > 0) {
+        bot.afkTimer -= scaledDt;
+        state.joy.dx = 0;
+        state.joy.dy = 0;
+        return;
+    }
+    if (Math.random() < profile.afkChance * dt) {
+        bot.afkTimer = 0.5 + Math.random() * 2;
+        return;
+    }
+
+    if (state.screen === 'playing') {
+        botPlayUpdate(scaledDt);
+    } else if (state.screen === 'sorting') {
+        botSortUpdate(scaledDt);
+    } else if (state.screen === 'dayEnd') {
+        botDayEnd();
+    } else if (state.screen === 'upgrade') {
+        botUpgrade();
+    }
+}
+
+function botPlayUpdate(dt) {
+    const profile = bot.currentProfile;
+
+    // Reconsider target periodically or when current target is done
+    bot.targetLock -= dt;
+    if (!bot.target || bot.targetLock <= 0) {
+        bot.target = botChooseTarget();
+        bot.targetLock = 0.5 + Math.random() * 1.5; // re-evaluate every 0.5-2s
+
+        // Random chance to pick a wrong/suboptimal station
+        if (Math.random() < profile.wrongStationChance) {
+            const stations = ['incoming', 'sorting', 'counter', 'outgoing'];
+            bot.target = stations[Math.floor(Math.random() * stations.length)];
+        }
+    }
+
+    // Move toward target
+    if (bot.target) {
+        const s = STATIONS[bot.target];
+        const sc = stationCenter(s);
+        const dx = sc.x - state.player.x;
+        const dy = sc.y - state.player.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+
+        if (d > 10) {
+            // Add slight wobble to path (humans don't walk perfectly straight)
+            const wobble = Math.sin(Date.now() * 0.003) * 0.15;
+            state.joy.dx = (dx / d) + wobble;
+            state.joy.dy = (dy / d) + wobble * 0.5;
+            state.joy.active = true;
+        } else {
+            state.joy.dx = 0;
+            state.joy.dy = 0;
+            state.joy.active = false;
+        }
+    }
+}
+
+function botChooseTarget() {
+    const profile = bot.currentProfile;
+    const weight = stackWeight();
+
+    // Build weighted options based on what's available
+    const options = [];
+
+    // Can pick up mail?
+    if (state.incomingPile.length > 0 && weight < state.maxStack) {
+        options.push({ key: 'incoming', w: profile.sortPriority * (1 + state.incomingPile.length * 0.2) });
+    }
+    // Can sort?
+    if (state.stack.length > 0) {
+        options.push({ key: 'sorting', w: profile.sortPriority * (1 + state.stack.length * 0.5) });
+    }
+    // Can serve?
+    if (state.customers.length > 0) {
+        // Urgency increases as patience drops
+        const urgency = state.customers.some(c => c.patience < 5000) ? 3 : 1;
+        options.push({ key: 'counter', w: profile.servePriority * urgency });
+    }
+    // Can dispatch?
+    if (state.outgoingPile.length > 0) {
+        const urgency = (state.outgoingDeadline > 0 && state.outgoingTimer > state.outgoingDeadline * 0.6) ? 3 : 1;
+        options.push({ key: 'outgoing', w: profile.dispatchPriority * urgency * (1 + state.outgoingPile.length * 0.3) });
+    }
+
+    if (options.length === 0) {
+        // Nothing to do — go to incoming and wait
+        return 'incoming';
+    }
+
+    // Weighted random selection
+    const totalW = options.reduce((sum, o) => sum + o.w, 0);
+    let r = Math.random() * totalW;
+    for (const o of options) {
+        r -= o.w;
+        if (r <= 0) return o.key;
+    }
+    return options[options.length - 1].key;
+}
+
+function botSortUpdate(dt) {
+    const profile = bot.currentProfile;
+
+    // Think delay before swiping
+    if (bot.thinkDelay > 0) {
+        bot.thinkDelay -= dt;
+        return;
+    }
+
+    if (!state.sortItem) return;
+
+    // Decide: correct or wrong?
+    const correct = Math.random() < profile.accuracy;
+    const activeBins = BIN_COLS.slice(0, state.sortBinCount);
+
+    let targetDir;
+    if (correct) {
+        targetDir = activeBins[state.sortItem.bin].dir;
+    } else {
+        // Pick a random wrong bin
+        const wrongBins = activeBins.filter((_, i) => i !== state.sortItem.bin);
+        targetDir = wrongBins[Math.floor(Math.random() * wrongBins.length)].dir;
+    }
+
+    // Simulate swipe
+    const swipeLen = 60;
+    const cx = CANVAS_W / 2;
+    const cy = CANVAS_H / 2;
+    let endX = cx, endY = cy;
+    if (targetDir === 'left') endX -= swipeLen;
+    else if (targetDir === 'right') endX += swipeLen;
+    else if (targetDir === 'up') endY -= swipeLen;
+
+    state.sortSwipe = { startX: cx, startY: cy };
+    handleSortSwipe(endX, endY);
+    state.sortSwipe = null;
+
+    // Add think delay for next item
+    bot.thinkDelay = 0.15 + Math.random() * 0.4;
+}
+
+function botDayEnd() {
+    // Log day data
+    bot.dayLog.push({
+        day: state.day - 1,
+        coins: state.dayCoins,
+        sorted: state.sortedCount,
+        missorts: state.missortCount,
+        served: state.customersServed,
+        delivered: state.mailDelivered,
+        streak: state.bestStreak,
+        stars: state.dayStars,
+        totalCoins: state.coins + state.dayCoins,
+    });
+
+    // Check if done with this profile
+    if (state.day > bot.maxDays) {
+        botEndProfile();
+        return;
+    }
+
+    state.screen = 'upgrade';
+}
+
+function botUpgrade() {
+    const profile = bot.currentProfile;
+
+    // Try to buy an upgrade
+    let bought = false;
+    UPGRADE_DEFS.forEach((def) => {
+        if (bought) return;
+        const cost = getUpgradeCost(def);
+        if (state.coins >= cost) {
+            // Profile preference or random
+            if (profile.upgradePreference === 'random' || profile.upgradePreference === def.key) {
+                if (profile.upgradePreference === 'random' && Math.random() > 0.5) return; // 50/50 skip
+                state.coins -= cost;
+                state.totalCoins = state.coins;
+                state.upgrades[def.key]++;
+                def.apply();
+                bought = true;
+            }
+        }
+    });
+
+    // Start next day
+    startDay();
+}
+
+function botEndProfile() {
+    const profile = bot.currentProfile;
+    const log = bot.dayLog;
+
+    // Compute summary stats
+    const totalCoins = log.reduce((s, d) => s + d.coins, 0);
+    const totalSorted = log.reduce((s, d) => s + d.sorted, 0);
+    const totalMissorts = log.reduce((s, d) => s + d.missorts, 0);
+    const totalServed = log.reduce((s, d) => s + d.served, 0);
+    const totalStars = log.reduce((s, d) => s + d.stars, 0);
+    const avgCoins = (totalCoins / log.length).toFixed(1);
+    const avgSorted = (totalSorted / log.length).toFixed(1);
+    const accuracy = totalSorted > 0 ? ((totalSorted / (totalSorted + totalMissorts)) * 100).toFixed(1) : '0';
+    const bestStreak = Math.max(...log.map(d => d.streak));
+
+    const summary = {
+        profile: profile.name,
+        days: log.length,
+        totalCoins,
+        avgCoinsPerDay: parseFloat(avgCoins),
+        totalSorted,
+        avgSortedPerDay: parseFloat(avgSorted),
+        totalMissorts,
+        accuracy: parseFloat(accuracy) + '%',
+        totalServed,
+        totalStars,
+        bestStreak,
+        finalUpgrades: { ...state.upgrades },
+        dayBreakdown: log,
+    };
+
+    bot.results.push(summary);
+
+    console.log(`%c[BOT] ${profile.name} complete`, 'color: #D4A83B; font-weight: bold');
+    console.table([{
+        Profile: profile.name,
+        Days: log.length,
+        'Total Coins': totalCoins,
+        'Avg/Day': avgCoins,
+        'Sorted': totalSorted,
+        'Accuracy': accuracy + '%',
+        'Stars': totalStars,
+        'Best Streak': bestStreak,
+        'Final Cap': state.maxStack,
+        'Final Speed': state.moveSpeed.toFixed(1),
+    }]);
+
+    // Next profile
+    bot.profileIndex++;
+    botStartProfile();
+}
+
+function botFinish() {
+    bot.active = false;
+    console.log('%c[BOT] All profiles complete!', 'color: #D4483B; font-weight: bold; font-size: 14px');
+    console.log('[BOT] Full results available at: window.BOT_RESULTS');
+
+    // Print comparison table
+    console.table(bot.results.map(r => ({
+        Profile: r.profile,
+        Days: r.days,
+        'Total Coins': r.totalCoins,
+        'Avg Coins/Day': r.avgCoinsPerDay,
+        'Total Sorted': r.totalSorted,
+        'Accuracy': r.accuracy,
+        'Stars': r.totalStars,
+        'Best Streak': r.bestStreak,
+        'Final Cap': r.finalUpgrades.capacity + 3,
+        'Final Speed Lv': r.finalUpgrades.speed,
+    })));
+
+    // Expose for programmatic access
+    window.BOT_RESULTS = bot.results;
+
+    // Day-by-day coin curve for balance analysis
+    console.log('%c[BOT] Day-by-day coin curves:', 'color: #2B4570; font-weight: bold');
+    for (const r of bot.results) {
+        console.log(`${r.profile}: [${r.dayBreakdown.map(d => d.coins).join(', ')}]`);
+    }
+}
+
+// ============================================================
 // START
 // ============================================================
-window.addEventListener('load', init);
+window.addEventListener('load', () => {
+    init();
+    initBot();
+});
