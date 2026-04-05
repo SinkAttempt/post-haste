@@ -306,6 +306,11 @@ function handlePointerDown(x, y, id) {
         return;
     }
     if (state.screen === 'playing') {
+        // Debug skip button (top-right)
+        if (x > CANVAS_W - 50 && x < CANVAS_W && y > 62 && y < 84) {
+            endDay();
+            return;
+        }
         // Start joystick
         if (y > CANVAS_H * 0.6) {
             state.joy.active = true;
@@ -845,6 +850,15 @@ function drawHUD() {
     // Sorted count
     ctx.textAlign = 'right';
     ctx.fillText('Sorted: ' + state.sortedCount, CANVAS_W - 15, 55);
+
+    // Debug: Skip day button (top-right)
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    drawRoundRect(CANVAS_W - 50, 62, 40, 22, 4);
+    ctx.fill();
+    ctx.fillStyle = COL.white;
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SKIP', CANVAS_W - 30, 74);
 
     ctx.restore();
 }
