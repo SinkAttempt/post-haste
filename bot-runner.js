@@ -135,6 +135,10 @@ for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
         lastMeaningfulAction: 0,
         stuckFlags: [],
         dayTimeSpent: {},
+        // Human-like behaviour
+        driftTimer: 0,
+        driftDx: 0,
+        driftDy: 0,
     };
 
     const dayResults = [];
@@ -144,6 +148,8 @@ for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
 
     let tickCount = 0;
     const maxTicks = DAYS_EACH * DAY_BASE_TIME / dt * 2; // safety limit
+
+    let fatigueAccPenalty = 0; // hoisted for use in sort block
 
     while (state.day <= DAYS_EACH && tickCount < maxTicks) {
         tickCount++;
@@ -199,14 +205,31 @@ for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
                 }
             }
 
+            // Fatigue in last 20s
+            const fatigued = state.timeLeft < 20;
+            fatigueAccPenalty = fatigued ? (profile.fatigue || 0) : 0;
+
             // AFK
             if (botState.afkTimer > 0) {
                 botState.afkTimer -= dt;
                 state.joy.dx = 0;
                 state.joy.dy = 0;
+            } else if (botState.driftTimer > 0) {
+                // Attention drift — wander randomly
+                botState.driftTimer -= dt;
+                state.joy.dx = botState.driftDx;
+                state.joy.dy = botState.driftDy;
+                state.joy.active = true;
             } else if (Math.random() < profile.afkChance * dt) {
                 botState.afkTimer = 0.5 + Math.random() * 2;
                 botState.events.push({ type: 'afk', t: DAY_BASE_TIME - state.timeLeft });
+            } else if (Math.random() < (profile.driftChance || 0) * dt) {
+                // Start drifting
+                const angle = Math.random() * Math.PI * 2;
+                botState.driftDx = Math.cos(angle) * 0.6;
+                botState.driftDy = Math.sin(angle) * 0.6;
+                botState.driftTimer = 0.5 + Math.random() * 2;
+                botState.events.push({ type: 'drift', t: DAY_BASE_TIME - state.timeLeft });
             } else {
                 // Choose target
                 botState.targetLock -= dt;
@@ -215,7 +238,8 @@ for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
                     botState.target = botChooseTargetPure(profile, botState);
                     botState.targetLock = 0.5 + Math.random() * 1.5;
 
-                    if (Math.random() < profile.wrongStationChance) {
+                    const wrongChance = profile.wrongStationChance + (fatigued ? 0.1 : 0);
+                    if (Math.random() < wrongChance) {
                         const stations = ['incoming', 'sorting', 'counter', 'outgoing'];
                         botState.target = stations[Math.floor(Math.random() * stations.length)];
                     }
@@ -231,13 +255,32 @@ for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
                 if (botState.target) {
                     const s = STATIONS[botState.target];
                     const sc = stationCenter(s);
-                    const ddx = sc.x - state.player.x;
-                    const ddy = sc.y - state.player.y;
+                    let ddx = sc.x - state.player.x;
+                    let ddy = sc.y - state.player.y;
                     const d = Math.sqrt(ddx * ddx + ddy * ddy);
                     if (d > 10) {
-                        const wobble = Math.sin(tickCount * 0.05) * 0.15;
-                        state.joy.dx = (ddx / d) + wobble;
-                        state.joy.dy = (ddy / d) + wobble * 0.5;
+                        let moveX = ddx / d;
+                        let moveY = ddy / d;
+
+                        // Hazard avoidance
+                        if (state.hazards) {
+                            for (const h of state.hazards) {
+                                const hd = Math.sqrt((state.player.x - h.x) ** 2 + (state.player.y - h.y) ** 2);
+                                const avoidDist = h.type.radius + 18 + 20;
+                                if (hd < avoidDist && Math.random() < (profile.hazardAvoid || 0)) {
+                                    const hAngle = Math.atan2(state.player.y - h.y, state.player.x - h.x);
+                                    const strength = (avoidDist - hd) / avoidDist * 0.8;
+                                    moveX += Math.cos(hAngle) * strength;
+                                    moveY += Math.sin(hAngle) * strength;
+                                }
+                            }
+                            const len = Math.sqrt(moveX * moveX + moveY * moveY);
+                            if (len > 0) { moveX /= len; moveY /= len; }
+                        }
+
+                        const wobble = Math.sin(tickCount * 0.05 + Math.random() * 0.5) * 0.2;
+                        state.joy.dx = moveX + wobble;
+                        state.joy.dy = moveY + wobble * 0.5;
                         state.joy.active = true;
                     } else {
                         state.joy.dx = 0;
@@ -256,7 +299,8 @@ for (let botIdx = 0; botIdx < NUM_BOTS; botIdx++) {
                 updateParticles(dt);
                 updateScreenEffects();
             } else if (state.sortItem) {
-                const correct = Math.random() < profile.accuracy;
+                const effectiveAcc = Math.max(0.3, profile.accuracy - fatigueAccPenalty);
+                const correct = Math.random() < effectiveAcc;
                 const activeBins = BIN_COLS.slice(0, state.sortBinCount);
                 let targetDir;
                 if (correct) {

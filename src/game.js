@@ -55,6 +55,175 @@ const FIXED_FEATURES = [
     { col: 0, row: 6, label: 'DOCK', icon: '\u{1F69B}' },       // loading dock bottom-left
 ];
 
+// ============================================================
+// FLOOR HAZARDS — random obstacles that inject variance
+// ============================================================
+const HAZARD_TYPES = [
+    {
+        name: 'coffee',
+        icon: '\u{2615}',
+        label: 'Spilled Coffee',
+        radius: 22,
+        effect: 'slow',       // slows player to 40% speed
+        slowFactor: 0.4,
+        moves: false,
+    },
+    {
+        name: 'cat',
+        icon: '\u{1F408}',
+        label: 'Office Cat',
+        radius: 16,
+        effect: 'bump',       // bumps player in random direction
+        bumpForce: 3,
+        moves: true,
+        moveSpeed: 1.2,
+    },
+    {
+        name: 'box',
+        icon: '\u{1F4E6}',
+        label: 'Dropped Box',
+        radius: 20,
+        effect: 'block',      // solid obstacle, push player out
+        moves: false,
+    },
+];
+
+function spawnHazards() {
+    const hazards = [];
+    // Day 1: just one coffee to introduce the concept. After that, scale up.
+    const maxHazards = state.day <= 1 ? 1 : Math.min(2 + Math.floor(state.day / 4), 5);
+    const count = 1 + Math.floor(Math.random() * maxHazards);
+
+    for (let i = 0; i < count; i++) {
+        const type = HAZARD_TYPES[Math.floor(Math.random() * HAZARD_TYPES.length)];
+        // Pick a random position inside the office, away from stations
+        let x, y, valid;
+        let attempts = 0;
+        do {
+            x = OFFICE.x + 40 + Math.random() * (OFFICE.w - 80);
+            y = OFFICE.y + 60 + Math.random() * (OFFICE.h - 120);
+            valid = true;
+            // Not too close to any station
+            for (const key in STATIONS) {
+                const sc = stationCenter(STATIONS[key]);
+                if (dist(x, y, sc.x, sc.y) < 60) { valid = false; break; }
+            }
+            // Not too close to player start
+            if (dist(x, y, 195, 350) < 50) valid = false;
+            attempts++;
+        } while (!valid && attempts < 20);
+
+        if (valid) {
+            hazards.push({
+                type,
+                x, y,
+                // Cat movement state
+                vx: type.moves ? (Math.random() - 0.5) * type.moveSpeed : 0,
+                vy: type.moves ? (Math.random() - 0.5) * type.moveSpeed : 0,
+                dirTimer: 2 + Math.random() * 3, // time until cat changes direction
+                bumpCooldown: 0,
+            });
+        }
+    }
+    return hazards;
+}
+
+function updateHazards(dt) {
+    for (const h of state.hazards) {
+        h.bumpCooldown = Math.max(0, h.bumpCooldown - dt);
+
+        // Move wandering hazards (cat)
+        if (h.type.moves) {
+            h.x += h.vx;
+            h.y += h.vy;
+
+            // Bounce off office walls
+            if (h.x < OFFICE.x + 30 || h.x > OFFICE.x + OFFICE.w - 30) h.vx *= -1;
+            if (h.y < OFFICE.y + 30 || h.y > OFFICE.y + OFFICE.h - 30) h.vy *= -1;
+            h.x = Math.max(OFFICE.x + 20, Math.min(OFFICE.x + OFFICE.w - 20, h.x));
+            h.y = Math.max(OFFICE.y + 20, Math.min(OFFICE.y + OFFICE.h - 20, h.y));
+
+            // Random direction changes
+            h.dirTimer -= dt;
+            if (h.dirTimer <= 0) {
+                h.vx = (Math.random() - 0.5) * h.type.moveSpeed * 2;
+                h.vy = (Math.random() - 0.5) * h.type.moveSpeed * 2;
+                h.dirTimer = 1.5 + Math.random() * 3;
+            }
+        }
+    }
+}
+
+// Returns speed multiplier and any bump to apply
+function checkHazardCollisions() {
+    let speedMult = 1.0;
+    let bumpX = 0, bumpY = 0;
+
+    for (const h of state.hazards) {
+        const d = dist(state.player.x, state.player.y, h.x, h.y);
+        const touchDist = PLAYER_RADIUS + h.type.radius;
+
+        if (d < touchDist) {
+            if (h.type.effect === 'slow') {
+                speedMult = Math.min(speedMult, h.type.slowFactor);
+            }
+            if (h.type.effect === 'bump' && h.bumpCooldown <= 0) {
+                const angle = Math.atan2(state.player.y - h.y, state.player.x - h.x);
+                bumpX += Math.cos(angle) * h.type.bumpForce;
+                bumpY += Math.sin(angle) * h.type.bumpForce;
+                h.bumpCooldown = 1.0; // 1s cooldown between bumps
+            }
+            if (h.type.effect === 'block' && d < touchDist) {
+                // Push player out of the box
+                const angle = Math.atan2(state.player.y - h.y, state.player.x - h.x);
+                const pushDist = touchDist - d + 1;
+                state.player.x += Math.cos(angle) * pushDist;
+                state.player.y += Math.sin(angle) * pushDist;
+            }
+        }
+    }
+
+    return { speedMult, bumpX, bumpY };
+}
+
+function drawHazards() {
+    for (const h of state.hazards) {
+        ctx.save();
+
+        // Shadow
+        ctx.fillStyle = COL.shadow;
+        ctx.beginPath();
+        ctx.ellipse(h.x + 2, h.y + 2, h.type.radius, h.type.radius * 0.6, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Hazard zone circle (subtle)
+        ctx.globalAlpha = 0.15;
+        ctx.fillStyle = h.type.effect === 'slow' ? '#8B4513' : h.type.effect === 'bump' ? '#FF8C00' : '#666';
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, h.type.radius + 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Icon
+        ctx.globalAlpha = 1;
+        ctx.font = (h.type.radius + 6) + 'px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        // Cat faces the direction it's moving
+        if (h.type.moves && h.vx < -0.2) {
+            ctx.save();
+            ctx.translate(h.x, h.y);
+            ctx.scale(-1, 1);
+            ctx.fillText(h.type.icon, 0, 0);
+            ctx.restore();
+        } else {
+            ctx.fillText(h.type.icon, h.x, h.y);
+        }
+
+        ctx.restore();
+    }
+}
+
 // Station definitions — with placement constraints
 const STATION_DEFS = {
     incoming: { w: 70, h: 55, label: 'MAIL IN', icon: '\u{1F4E8}', col: COL.brown,
@@ -400,6 +569,7 @@ const state = {
     // Day modifiers (randomised each day for variety)
     dayMod: null,  // { name, mailMult, custMult, tipMult, parcelBoost }
     dayEvents: [], // random events scheduled for current day
+    hazards: [],   // floor hazards for current day
 };
 
 // ============================================================
@@ -1283,6 +1453,9 @@ function startDay() {
             state.dayEvents.push({ type: 'vip', triggerAt, done: false });
         }
     }
+
+    // Spawn floor hazards
+    state.hazards = spawnHazards();
 }
 
 function endDay() {
@@ -1448,9 +1621,14 @@ function update(dt) {
         if (hasFragile) fragileSlowdown = 0.6;
     }
 
-    // Move player
-    const px = state.player.x + state.joy.dx * state.moveSpeed * fragileSlowdown;
-    const py = state.player.y + state.joy.dy * state.moveSpeed * fragileSlowdown;
+    // Update floor hazards
+    updateHazards(dt);
+    const hazardResult = checkHazardCollisions();
+
+    // Move player (hazards affect speed)
+    const hazardSlow = hazardResult.speedMult;
+    const px = state.player.x + state.joy.dx * state.moveSpeed * fragileSlowdown * hazardSlow + hazardResult.bumpX;
+    const py = state.player.y + state.joy.dy * state.moveSpeed * fragileSlowdown * hazardSlow + hazardResult.bumpY;
 
     // Clamp to office bounds
     const margin = PLAYER_RADIUS + 5;
@@ -3028,6 +3206,7 @@ function render() {
             ctx.fillStyle = COL.bg;
             ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
             drawOffice();
+            drawHazards();
             drawNavArrow();
             drawParticles();
             drawPlayer();
@@ -3066,11 +3245,16 @@ function render() {
 // BOT SIMULATION MODE — ?bot=true or ?bot=100 (num days)
 // ============================================================
 const BOT_PROFILES = [
-    { name: 'rookie',      accuracy: 0.6,  afkChance: 0.15, wrongStationChance: 0.25, sortPriority: 0.4, servePriority: 0.3, dispatchPriority: 0.3, upgradePreference: 'random' },
-    { name: 'balanced',    accuracy: 0.82, afkChance: 0.05, wrongStationChance: 0.1,  sortPriority: 0.4, servePriority: 0.3, dispatchPriority: 0.3, upgradePreference: 'random' },
-    { name: 'sorter',      accuracy: 0.92, afkChance: 0.03, wrongStationChance: 0.05, sortPriority: 0.7, servePriority: 0.1, dispatchPriority: 0.2, upgradePreference: 'capacity' },
-    { name: 'server',      accuracy: 0.75, afkChance: 0.05, wrongStationChance: 0.1,  sortPriority: 0.2, servePriority: 0.6, dispatchPriority: 0.2, upgradePreference: 'speed' },
-    { name: 'speedrunner', accuracy: 0.95, afkChance: 0.01, wrongStationChance: 0.02, sortPriority: 0.45, servePriority: 0.25, dispatchPriority: 0.3, upgradePreference: 'speed' },
+    { name: 'rookie',      accuracy: 0.6,  afkChance: 0.15, wrongStationChance: 0.25, sortPriority: 0.4, servePriority: 0.3, dispatchPriority: 0.3, upgradePreference: 'random',
+      fatigue: 0.15, driftChance: 0.08, hazardAvoid: 0.2 },
+    { name: 'balanced',    accuracy: 0.82, afkChance: 0.05, wrongStationChance: 0.1,  sortPriority: 0.4, servePriority: 0.3, dispatchPriority: 0.3, upgradePreference: 'random',
+      fatigue: 0.08, driftChance: 0.04, hazardAvoid: 0.5 },
+    { name: 'sorter',      accuracy: 0.92, afkChance: 0.03, wrongStationChance: 0.05, sortPriority: 0.7, servePriority: 0.1, dispatchPriority: 0.2, upgradePreference: 'capacity',
+      fatigue: 0.05, driftChance: 0.02, hazardAvoid: 0.7 },
+    { name: 'server',      accuracy: 0.75, afkChance: 0.05, wrongStationChance: 0.1,  sortPriority: 0.2, servePriority: 0.6, dispatchPriority: 0.2, upgradePreference: 'speed',
+      fatigue: 0.10, driftChance: 0.05, hazardAvoid: 0.4 },
+    { name: 'speedrunner', accuracy: 0.95, afkChance: 0.01, wrongStationChance: 0.02, sortPriority: 0.45, servePriority: 0.25, dispatchPriority: 0.3, upgradePreference: 'speed',
+      fatigue: 0.03, driftChance: 0.01, hazardAvoid: 0.9 },
 ];
 
 let bot = null;
@@ -3110,6 +3294,10 @@ function initBot() {
         dayTimeSpent: {},       // time spent near each station per day
         nearStation: null,      // which station player is currently near
         nearTimer: 0,           // how long near current station
+        driftTimer: 0,          // attention drift timer
+        driftDx: 0,             // drift direction
+        driftDy: 0,
+        fatigueAccPenalty: 0,   // current fatigue accuracy penalty
     };
 
     console.log('%c[BOT] Post Haste Simulation', 'color: #2B4570; font-weight: bold; font-size: 14px');
@@ -3254,6 +3442,28 @@ function botUpdate(dt) {
 function botPlayUpdate(dt) {
     const profile = bot.currentProfile;
 
+    // Fatigue: accuracy and decision quality drop in the last 20s of the day
+    const timeElapsed = DAY_BASE_TIME - state.timeLeft;
+    const fatigued = state.timeLeft < 20;
+    const fatigueAccPenalty = fatigued ? profile.fatigue : 0;
+
+    // Attention drift: randomly wander in a random direction for 1-3s
+    if (bot.driftTimer > 0) {
+        bot.driftTimer -= dt;
+        state.joy.dx = bot.driftDx;
+        state.joy.dy = bot.driftDy;
+        state.joy.active = true;
+        return;
+    }
+    if (Math.random() < (profile.driftChance || 0) * dt) {
+        const angle = Math.random() * Math.PI * 2;
+        bot.driftDx = Math.cos(angle) * 0.6;
+        bot.driftDy = Math.sin(angle) * 0.6;
+        bot.driftTimer = 0.5 + Math.random() * 2;
+        botLogEvent('drift', { duration: bot.driftTimer });
+        return;
+    }
+
     // Reconsider target periodically or when current target is done
     bot.targetLock -= dt;
     if (!bot.target || bot.targetLock <= 0) {
@@ -3261,9 +3471,10 @@ function botPlayUpdate(dt) {
         bot.target = botChooseTarget();
         bot.targetLock = 0.5 + Math.random() * 1.5;
 
-        // Random chance to pick a wrong/suboptimal station
+        // Random chance to pick a wrong/suboptimal station (increases with fatigue)
         let wrongPick = false;
-        if (Math.random() < profile.wrongStationChance) {
+        const wrongChance = profile.wrongStationChance + (fatigued ? 0.1 : 0);
+        if (Math.random() < wrongChance) {
             const stations = ['incoming', 'sorting', 'counter', 'outgoing'];
             bot.target = stations[Math.floor(Math.random() * stations.length)];
             wrongPick = true;
@@ -3278,15 +3489,36 @@ function botPlayUpdate(dt) {
     if (bot.target) {
         const s = STATIONS[bot.target];
         const sc = stationCenter(s);
-        const dx = sc.x - state.player.x;
-        const dy = sc.y - state.player.y;
+        let dx = sc.x - state.player.x;
+        let dy = sc.y - state.player.y;
         const d = Math.sqrt(dx * dx + dy * dy);
 
         if (d > 10) {
+            let moveX = dx / d;
+            let moveY = dy / d;
+
+            // Hazard avoidance: steer away from nearby hazards
+            if (state.hazards && state.hazards.length > 0) {
+                for (const h of state.hazards) {
+                    const hd = dist(state.player.x, state.player.y, h.x, h.y);
+                    const avoidDist = h.type.radius + PLAYER_RADIUS + 20;
+                    if (hd < avoidDist && Math.random() < (profile.hazardAvoid || 0)) {
+                        // Steer perpendicular to hazard
+                        const hAngle = Math.atan2(state.player.y - h.y, state.player.x - h.x);
+                        const avoidStrength = (avoidDist - hd) / avoidDist * 0.8;
+                        moveX += Math.cos(hAngle) * avoidStrength;
+                        moveY += Math.sin(hAngle) * avoidStrength;
+                    }
+                }
+                // Renormalise
+                const len = Math.sqrt(moveX * moveX + moveY * moveY);
+                if (len > 0) { moveX /= len; moveY /= len; }
+            }
+
             // Add slight wobble to path (humans don't walk perfectly straight)
-            const wobble = Math.sin(Date.now() * 0.003) * 0.15;
-            state.joy.dx = (dx / d) + wobble;
-            state.joy.dy = (dy / d) + wobble * 0.5;
+            const wobble = Math.sin(Date.now() * 0.003 + Math.random() * 0.5) * 0.2;
+            state.joy.dx = moveX + wobble;
+            state.joy.dy = moveY + wobble * 0.5;
             state.joy.active = true;
         } else {
             state.joy.dx = 0;
@@ -3294,6 +3526,9 @@ function botPlayUpdate(dt) {
             state.joy.active = false;
         }
     }
+
+    // Store fatigue penalty for sort accuracy
+    bot.fatigueAccPenalty = fatigueAccPenalty;
 }
 
 function botChooseTarget() {
@@ -3374,8 +3609,9 @@ function botSortUpdate(dt) {
 
     if (!state.sortItem) return;
 
-    // Decide: correct or wrong?
-    const correct = Math.random() < profile.accuracy;
+    // Decide: correct or wrong? (fatigue reduces accuracy)
+    const effectiveAcc = Math.max(0.3, profile.accuracy - (bot.fatigueAccPenalty || 0));
+    const correct = Math.random() < effectiveAcc;
     const activeBins = BIN_COLS.slice(0, state.sortBinCount);
 
     let targetDir;
