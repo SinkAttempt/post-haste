@@ -66,7 +66,7 @@ const JOY_DEAD = 8;
 const PROX_DIST = 45;
 
 // Day settings
-const DAY_BASE_TIME = 90; // 90 seconds — short, punchy shifts
+const DAY_BASE_TIME = 60; // 60 seconds — tight shifts
 const MAIL_SPAWN_INTERVAL_BASE = 2000; // ms between new mail at incoming
 const CUSTOMER_SPAWN_INTERVAL_BASE = 5000; // ms between customers
 const CUSTOMER_PATIENCE = 12000; // ms before customer leaves
@@ -404,7 +404,7 @@ function handleSortSwipe(endX, endY) {
         state.streak++;
         if (state.streak > state.bestStreak) state.bestStreak = state.streak;
         const multiplier = Math.min(1 + (state.streak - 1) * 0.5, 3);
-        const earned = Math.floor(state.sortItem.isParcel ? 8 * multiplier : 4 * multiplier);
+        const earned = Math.floor(state.sortItem.isParcel ? 6 * multiplier : 3 * multiplier);
         state.dayCoins += earned;
         state.sortedCount++;
         state.outgoingPile.push(state.sortItem);
@@ -599,7 +599,7 @@ function update(dt) {
         state.customers.push({
             id: Date.now(),
             patience: CUSTOMER_PATIENCE,
-            coins: 5 + Math.floor(Math.random() * 10),
+            coins: 3 + Math.floor(Math.random() * 7),
         });
         state.lastCustomerSpawn = now;
     }
@@ -652,7 +652,7 @@ function update(dt) {
     if (nearStation('outgoing') && state.outgoingPile.length > 0) {
         const delivered = state.outgoingPile.length;
         state.mailDelivered += delivered;
-        const bonus = delivered * 2;
+        const bonus = Math.floor(delivered * 1.5);
         state.dayCoins += bonus;
         floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.postal, 18));
         state.outgoingPile = [];
