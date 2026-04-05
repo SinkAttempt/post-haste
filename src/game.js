@@ -1770,6 +1770,11 @@ function update(dt) {
         addBump(0, -2);
         sfxCoin();
         setMoodOverride('tipjoy', 0.8);
+        // Tutorial: served a customer — tutorial complete!
+        if (!state.tutorialComplete && state.tutorialStep === 4) {
+            state.tutorialStep = 5;
+            state.tutorialComplete = true;
+        }
     }
 
     // OUTGOING: Deposit sorted mail
@@ -1783,10 +1788,17 @@ function update(dt) {
         floatingTexts.push(createFloatingText('+' + bonus + ' sent', STATIONS.outgoing.x + STATIONS.outgoing.w / 2, STATIONS.outgoing.y - 30, COL.red, 18));
         const oc = stationCenter(STATIONS.outgoing);
         spawnParticles(oc.x, oc.y, COL.postal, 10, 'burst');
-        // Tutorial: completed full cycle!
+        // Tutorial: dispatched! Now guide to serve counter
         if (!state.tutorialComplete && state.tutorialStep <= 3) {
             state.tutorialStep = 4;
-            state.tutorialComplete = true;
+            // Force-spawn a customer so there's someone to serve
+            if (state.customers.length === 0) {
+                state.customers.push({
+                    id: Date.now(),
+                    patience: CUSTOMER_PATIENCE * 2, // extra patient tutorial customer
+                    coins: 8,
+                });
+            }
         }
         addBump(0, -3);
         sfxDispatch();
@@ -2277,9 +2289,15 @@ function getNavTarget() {
         if (state.tutorialStep === 1) return 'incoming';
         if (state.tutorialStep === 2) return 'sorting';
         if (state.tutorialStep === 3) return 'outgoing';
+        if (state.tutorialStep === 4) return 'counter';
         return null;
     }
     // Post-tutorial: context-based nav
+    // Urgent customers jump the queue — don't let them walk out
+    if (state.customers.length > 0) {
+        const urgent = state.customers.some(c => c.patience < 5000);
+        if (urgent && state.stack.length === 0) return 'counter';
+    }
     if (state.stack.length === 0 && state.incomingPile.length > 0) return 'incoming';
     if (stackWeight() >= state.maxStack) return 'sorting';
     if (state.stack.length > 0 && state.outgoingPile.length === 0) return 'sorting';
@@ -2397,6 +2415,7 @@ function drawTutorialOverlay() {
         'Walk to the MAIL IN station',
         'Walk to the SORT desk — stop moving to sort',
         'Walk to SEND OUT to deliver your mail!',
+        'A customer is waiting! Walk to SERVE counter',
     ];
     const msg = messages[state.tutorialStep];
     if (!msg) return;
